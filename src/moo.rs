@@ -6,6 +6,7 @@ use regex::Regex;
 use tungstenite::Error;
 
 use crate::transport_websocket::Transport;
+use crate::logger::Logger;
 
 static MOO_COUNT: AtomicU32 = AtomicU32::new(0);
 
@@ -21,11 +22,12 @@ pub struct Moo {
     pub unique_id: String,
     pub core: Option<Core>,
     req_id: u32,
-    requests: HashMap<u32, Box<dyn Fn(&mut Moo, Option<&JsonValue>) + Send + 'static>>
+    requests: HashMap<u32, Box<dyn Fn(&mut Moo, Option<&JsonValue>) + Send + 'static>>,
+    logger: Arc<Logger>
 }
 
 impl Moo {
-    pub fn new(transport: Transport, unique_id: String) -> Self {
+    pub fn new(transport: Transport, unique_id: String, logger: Arc<Logger>) -> Self {
         let mooid = MOO_COUNT.fetch_add(1, Ordering::Relaxed);
 
         Self {
@@ -34,7 +36,8 @@ impl Moo {
             core: None,
             unique_id,
             req_id: 0,
-            requests: HashMap::new()
+            requests: HashMap::new(),
+            logger
         }
     }
 
@@ -48,7 +51,7 @@ impl Moo {
         if let Some(body) = body {
             let body = json::stringify(body.clone());
 
-            println!("-> REQUEST {} {} {}", req_id, name, body);
+            self.logger.log(format!("-> REQUEST {} {} {}", req_id, name, body).as_str());
 
             let body = body.as_bytes();
 
@@ -56,7 +59,7 @@ impl Moo {
 
             transport.send(&[header.as_bytes(), body].concat())?;
         } else {
-            println!("-> REQUEST {} {}", req_id, name);
+            self.logger.log(format!("-> REQUEST {} {}", req_id, name).as_str());
 
             header.push('\n');
 
@@ -75,18 +78,22 @@ impl Moo {
         let mut e: usize = 0;
         let mut state = "";
         let mut msg = object! {
-            headers: {}
+            headers: {},
+            log: true
         };
 
         while e < buf.len() {
             if buf[e] == 0x0a {
                 if state == "header" {
                     if s == e {
+                        let logging = msg["headers"]["Logging"].to_string();
+                        let log = self.logger.log_level == "all" || logging != "quiet";
+
+                        msg["log"] = JsonValue::Boolean(log);
+
                         if msg["request_id"].is_null() {
                             return Err("MOO: missing Request-Id header")?;
                         }
-
-                        let request_id = msg["request_id"].as_str().unwrap().parse::<u32>()?;
 
                         if msg["content_length"].is_null() {
                             if !msg["content_type"].is_null() {
@@ -96,10 +103,12 @@ impl Moo {
                                 return Err("MOO: bad message; has no Content-Length, but data after headers")?;
                             }
 
-                            if msg["verb"] == "REQUEST" {
-                                println!("<- {} {} {}/{}", msg["verb"], request_id, msg["service"], msg["name"]);
-                            } else {
-                                println!("<- {} {} {}", msg["verb"], request_id, msg["name"]);
+                            if log {
+                                if msg["verb"] == "REQUEST" {
+                                    self.logger.log(format!("<- {} {} {}/{}", msg["verb"], msg["request_id"], msg["service"], msg["name"]).as_str());
+                                } else {
+                                    self.logger.log(format!("<- {} {} {}", msg["verb"], msg["request_id"], msg["name"]).as_str());
+                                }
                             }
                         } else {
                             let content_length = msg["content_length"].as_usize().unwrap();
@@ -115,10 +124,12 @@ impl Moo {
 
                                         msg["body"] = json::parse(body)?;
 
-                                        if msg["verb"] == "REQUEST" {
-                                            println!("<- {} {} {}/{} {}", msg["verb"], request_id, msg["service"], msg["name"], body);
-                                        } else {
-                                            println!("<- {} {} {} {}", msg["verb"], request_id, msg["name"], body);
+                                        if log {
+                                            if msg["verb"] == "REQUEST" {
+                                                self.logger.log(format!("<- {} {} {}/{} {}", msg["verb"], msg["request_id"], msg["service"], msg["name"], body).as_str());
+                                            } else {
+                                                self.logger.log(format!("<- {} {} {} {}", msg["verb"], msg["request_id"], msg["name"], body).as_str());
+                                            }
                                         }
                                     } else {
                                         msg["body"] = body.into();
@@ -236,16 +247,28 @@ pub struct MooMsg {
 impl MooMsg {
     pub fn new(moo: &mut Moo, msg: JsonValue) -> Self {
         let request_id = msg["request_id"].as_str().unwrap().parse::<u32>().unwrap();
+        let log = msg["log"].as_bool().unwrap();
+
         let transport = moo.transport.clone();
+        let logger = moo.logger.clone();
         let send_continue = move |name: &str, body: Option<&JsonValue>| {
-            let buf = Self::to_raw("CONTINUE", name, request_id, body);
+            let (buf, log_message) = Self::to_raw("CONTINUE", name, request_id, body);
+
+            if log {
+                logger.log(log_message.as_str());
+            }
 
             transport.lock().unwrap().send(&buf[..])
         };
 
         let transport = moo.transport.clone();
+        let logger = moo.logger.clone();
         let send_complete = move |name: &str, body: Option<&JsonValue>| {
-            let buf = Self::to_raw("COMPLETE", name, request_id, body);
+            let (buf, log_message) = Self::to_raw("COMPLETE", name, request_id, body);
+
+            if log {
+                logger.log(log_message.as_str());
+            }
 
             transport.lock().unwrap().send(&buf[..])
         };
@@ -258,27 +281,28 @@ impl MooMsg {
         }
     }
 
-    pub fn to_raw(state: &str, name: &str, request_id: u32, body: Option<&JsonValue>) -> Vec<u8> {
+    fn to_raw(state: &str, name: &str, request_id: u32, body: Option<&JsonValue>) -> (Vec<u8>, String) {
         let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", state, name, request_id);
+        let log_message;
 
         match body {
             Some(body) => {
                 let body = json::stringify(body.clone());
 
-                println!("-> {} {} {} {}", state, request_id, name, body);
+                log_message = format!("-> {} {} {} {}", state, request_id, name, body);
 
                 let body = body.as_bytes();
 
                 header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body.len()).as_str());
 
-                [header.as_bytes(), body].concat().to_vec()
+                ([header.as_bytes(), body].concat().to_vec(), log_message)
             }
             None => {
-                println!("-> {} {} {}", state, request_id, name);
+                log_message = format!("-> {} {} {}", state, request_id, name);
 
                 header.push('\n');
 
-                header.as_bytes().to_vec()
+                (header.as_bytes().to_vec(), log_message)
             }
         }
     }

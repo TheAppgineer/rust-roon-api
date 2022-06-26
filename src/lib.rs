@@ -62,8 +62,7 @@ impl RoonApi {
         self.on_core_found = Some(Arc::new(Mutex::new(Box::new(on_core_found))));
         self.on_core_lost = Some(Arc::new(Mutex::new(Box::new(on_core_lost))));
 
-        let logger = self.logger.clone();
-        let mut sood = sood::Sood::new(logger).unwrap();
+        let mut sood = sood::Sood::new().unwrap();
 
         let handle = thread::spawn(move || {
             const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
@@ -304,7 +303,7 @@ impl RoonApi {
 
     fn ws_connect(&'static self, ip: IpAddr, port: &String, unique_id: &String) -> Moo {
         let transport = Transport::new(ip, port).unwrap();
-        let mut moo = Moo::new(transport, unique_id.to_owned());
+        let mut moo = Moo::new(transport, unique_id.to_owned(), self.logger.clone());
         let extension_reginfo = self.extension_reginfo.clone();
 
         let reg_cb = move |moo: &mut Moo, _msg: Option<&JsonValue>| {
@@ -429,7 +428,8 @@ mod tests {
             display_name:    "Rust Roon API",
             display_version: "0.1.0",
             publisher:       "The Appgineer",
-            email:           "theappgineer@gmail.com"
+            email:           "theappgineer@gmail.com",
+            log_level:       "all"
         };
         let roon_api = Box::new(RoonApi::new(ext_opts));
         // Leak the RoonApi instance to give it a 'static lifetime

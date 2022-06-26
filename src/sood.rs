@@ -5,8 +5,6 @@ use std::thread::{self, JoinHandle};
 use std::sync::{Arc, Mutex, mpsc};
 use uuid::Uuid;
 
-use crate::logger::Logger;
-
 const SOOD_PORT: u16 = 9003;
 const SOOD_MULTICAST_IP: [u8; 4] = [239, 255, 90, 90];
 const LISTEN_ALL_RANDOM_PORT: &str = "0.0.0.0:0";
@@ -14,8 +12,7 @@ const LISTEN_ALL_RANDOM_PORT: &str = "0.0.0.0:0";
 pub struct Sood {
     multicast: Arc<Mutex<HashMap<Ipv4Addr, Multicast>>>,
     unicast: Arc<Mutex<Unicast>>,
-    iface_seq: i32,
-    logger: Arc<Logger>
+    iface_seq: i32
 }
 
 pub struct Message {
@@ -36,12 +33,11 @@ struct Unicast {
 }
 
 impl Sood {
-    pub fn new (logger: Arc<Logger>) -> std::io::Result<Self> {
+    pub fn new () -> std::io::Result<Self> {
         Ok(Self {
             multicast: Arc::new(Mutex::new(HashMap::new())),
             unicast: Arc::new(Mutex::new(Unicast::new()?)),
-            iface_seq: 0,
-            logger
+            iface_seq: 0
         })
     }
 
@@ -129,8 +125,6 @@ impl Sood {
         for iface in list {
             if !iface.is_loopback() {
                 if let get_if_addrs::IfAddr::V4(ifv4addr) = iface.addr {
-                    self.logger.log(format!("{} {} {}", ifv4addr.ip, ifv4addr.netmask, iface.name).as_str());
-
                     iface_change |= self.listen_iface(ifv4addr.ip, ifv4addr.netmask);
                 }
             }

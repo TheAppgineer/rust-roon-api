@@ -7,7 +7,7 @@ pub struct Transport {
 }
 
 impl Transport {
-    pub fn new(ip: IpAddr, port: &String) -> Result<Self, Error> { //Result<(), Box<dyn Error>> {
+    pub fn new(ip: IpAddr, port: &String) -> Result<Self, Error> {
         let url = format!("ws://{}:{}/api", ip, port);
 
         match tungstenite::connect(Url::parse(&url).unwrap()) {

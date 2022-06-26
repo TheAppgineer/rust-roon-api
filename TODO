@@ -2,9 +2,9 @@ Core
 v Implement periodic sood queries
 v Implement core_lost
 v Implement multi core support
+v Implement logger
 - Implement persistent storage
 - Implement core pairing
-- Implement logger
 
 Cargo
 - Make Settings API a crate feature
