@@ -12,3 +12,6 @@ uuid = {version = "1.0.0", features = ["v4"]}
 url = "2.2.2"
 regex = "1.5.5"
 tungstenite = "0.17.2"
+
+[features]
+status = []

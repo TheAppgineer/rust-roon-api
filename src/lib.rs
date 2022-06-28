@@ -2,6 +2,8 @@ pub mod logger;
 pub mod sood;
 pub mod moo;
 pub mod transport_websocket;
+
+#[cfg(feature = "status")]
 pub mod status;
 
 use std::collections::HashMap;
@@ -16,7 +18,9 @@ use moo::Moo;
 use transport_websocket::Transport;
 
 use crate::logger::Logger;
-use crate::moo::{MooMsg, Core};
+use crate::moo::MooMsg;
+
+pub use moo::Core;
 
 const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
 const TEN_SECONDS: i32 = 10 * 100;
@@ -296,7 +300,7 @@ impl RoonApi {
         Svc {
             name: svc_name.to_owned(),
             send_continue_all: Arc::new(Mutex::new(Box::new(send_continue_all))),
-            _send_complete_all: Arc::new(Mutex::new(Box::new(send_complete_all))),
+            send_complete_all: Arc::new(Mutex::new(Box::new(send_complete_all))),
             _subtypes: subtypes
         }
     }
@@ -360,7 +364,7 @@ impl RoonApi {
     }
 }
 
-struct Sub {
+pub struct Sub {
     subscribe_name: String,
     unsubscribe_name: String,
     start: Box<dyn Fn(&mut MooMsg) + Send + 'static>,
@@ -368,7 +372,7 @@ struct Sub {
 }
 
 impl Sub {
-    fn new<F>(subscribe_name: &str, unsubscribe_name: &str, cb: F) -> Self
+    pub fn new<F>(subscribe_name: &str, unsubscribe_name: &str, cb: F) -> Self
     where F: Fn(&mut MooMsg) + Send + 'static
     {
         Self {
@@ -393,7 +397,7 @@ impl SvcSpec {
         }
     }
 
-    fn add_sub(&mut self, sub: Sub) {
+    pub fn add_sub(&mut self, sub: Sub) {
         let sub = Arc::new(Mutex::new(sub));
         self.subs.push(sub);
     }
@@ -408,12 +412,13 @@ impl SvcSpec {
 #[derive(Clone)]
 pub struct Svc {
     name: String,
-    send_continue_all: Arc<Mutex<Box<dyn Fn(&str, &str, JsonValue) -> Result<(), Error> + Send>>>,
-    _send_complete_all: Arc<Mutex<Box<dyn Fn(&str, &str, JsonValue) -> Result<(), Error> + Send>>>,
+    pub send_continue_all: Arc<Mutex<Box<dyn Fn(&str, &str, JsonValue) -> Result<(), Error> + Send>>>,
+    pub send_complete_all: Arc<Mutex<Box<dyn Fn(&str, &str, JsonValue) -> Result<(), Error> + Send>>>,
     _subtypes: Arc<Mutex<HashMap<String, (String, MooMsg)>>>
 }
 
 #[cfg(test)]
+#[cfg(feature = "status")]
 mod tests {
     use json::{object, JsonValue};
     use std::sync::{Arc, Mutex};
