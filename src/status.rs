@@ -66,3 +66,45 @@ impl Status {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use json::{object, JsonValue};
+    use std::sync::{Arc, Mutex};
+
+    use crate::{RoonApi, Core};
+    use crate::status::Status;
+
+    #[test]
+    fn it_works() {
+        let ext_opts: JsonValue = object! {
+            extension_id:    "com.theappgineer.rust-roon-api",
+            display_name:    "Rust Roon API",
+            display_version: "0.1.0",
+            publisher:       "The Appgineer",
+            email:           "theappgineer@gmail.com",
+            log_level:       "all"
+        };
+        let roon_api = Box::new(RoonApi::new(ext_opts));
+        // Leak the RoonApi instance to give it a 'static lifetime
+        let roon_api: &'static mut RoonApi = Box::leak(roon_api);
+        let svc_status = Arc::new(Mutex::new(Status::new(&roon_api)));
+
+        roon_api.init_services(&[svc_status.lock().unwrap().svc.clone()]);
+
+        let clone = svc_status.clone();
+        let on_core_found = move |core: &Core| {
+            let message = format!("Core found: {}", core.display_name);
+            let mut svc_status = clone.lock().unwrap();
+            svc_status.set_status(&message, false);
+        };
+        let on_core_lost = move |core: &Core| {
+            let message = format!("Core lost: {}", core.display_name);
+            let mut svc_status = svc_status.lock().unwrap();
+            svc_status.set_status(&message, false);
+        };
+        let handle = roon_api.start_discovery(on_core_found, on_core_lost);
+
+        handle.join().unwrap();
+    }
+}
