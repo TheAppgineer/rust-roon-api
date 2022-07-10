@@ -21,9 +21,8 @@ use moo::Moo;
 use transport_websocket::Transport;
 
 use crate::logger::Logger;
-use crate::moo::MooMsg;
 
-pub use moo::Core;
+pub use moo::{Core, MooMsg};
 
 const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
 const TEN_SECONDS: i32 = 10 * 100;
@@ -305,6 +304,38 @@ impl RoonApi {
             send_continue_all: Arc::new(Mutex::new(Box::new(send_continue_all))),
             send_complete_all: Arc::new(Mutex::new(Box::new(send_complete_all))),
             _subtypes: subtypes
+        }
+    }
+
+    pub fn save_config(key: &str, value: Option<JsonValue>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut json = Self::load_config(None)?;
+
+        if let Some(value) = value {
+            json[key] = value;
+        } else {
+            json.remove(key);
+        }
+
+        std::fs::write("config.json", json::stringify(json))?;
+
+        Ok(())
+    }
+
+    pub fn load_config(key: Option<&str>) -> Result<JsonValue, Box<dyn std::error::Error>> {
+        if let Ok(content) = std::fs::read("config.json") {
+            let content = std::str::from_utf8(&content[..])?;
+            let json = json::parse(content)?;
+    
+            match key {
+                Some(key) => {
+                    Ok(json[key].to_owned())
+                }
+                None => {
+                    Ok(json)
+                }
+            }
+        } else {
+            Ok(object! {})
         }
     }
 

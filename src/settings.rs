@@ -5,11 +5,17 @@ use std::sync::{Arc, Mutex};
 use crate::{RoonApi, MooMsg, SvcSpec, Sub, Svc};
 
 pub struct Settings {
-    pub svc: Svc,
+    pub svc: Option<Svc>,
 }
 
 impl Settings {
-    pub fn new<F, G>(roon: &RoonApi, get_settings: F, save_settings: G) -> Self
+    pub fn new() -> Self {
+        Self {
+            svc: None
+        }
+    }
+
+    pub fn register<F, G>(&mut self, roon: &RoonApi, get_settings: F, save_settings: G)
     where F: Fn(Box<dyn Fn(JsonValue)>) + Send + 'static,
           G: Fn(&MooMsg, bool, &JsonValue) + Send + 'static
     {
@@ -49,19 +55,17 @@ impl Settings {
         };
         spec.add_method("save_settings".to_string(), save_settings_method);
 
-        let svc = roon.register_service("com.roonlabs.settings:1", spec);
-
-        Self {
-            svc
-        }
+        self.svc = Some(roon.register_service("com.roonlabs.settings:1", spec));
     }
 
     pub fn update_settings(&self, settings: JsonValue) {
-        let send_continue_all = self.svc.send_continue_all.lock().unwrap();
-        let body = object! { settings: settings };
-
-        if let Err(error) = (send_continue_all)("subscribe_settings", "Changed", body) {
-            println!("{}", error);
+        if let Some(svc) = &self.svc {
+            let send_continue_all = svc.send_continue_all.lock().unwrap();
+            let body = object! { settings: settings };
+    
+            if let Err(error) = (send_continue_all)("subscribe_settings", "Changed", body) {
+                println!("{}", error);
+            }
         }
     }
 }
@@ -71,11 +75,11 @@ mod tests {
     use json::{object, JsonValue, array};
     use std::sync::{Arc, Mutex};
 
-    use crate::{RoonApi, Core, MooMsg};
+    use crate::{RoonApi, MooMsg};
     use crate::settings::Settings;
 
     #[test]
-    fn it_works() {
+    fn it_works() -> Result<(), Box<dyn std::error::Error>> {
         let ext_opts: JsonValue = object! {
             extension_id:    "com.theappgineer.rust-roon-api",
             display_name:    "Rust Roon API",
@@ -87,36 +91,43 @@ mod tests {
         let roon_api = Box::new(RoonApi::new(ext_opts));
         // Leak the RoonApi instance to give it a 'static lifetime
         let roon_api: &'static mut RoonApi = Box::leak(roon_api);
-        let get_settings = |cb: Box<dyn Fn(JsonValue)>| {
-            let settings = object! {};
+        let my_settings = Arc::new(Mutex::new(RoonApi::load_config(Some("settings"))?));
 
-            (cb)(makelayout(settings));
+        let svc_settings = Arc::new(Mutex::new(Settings::new()));
+        let my_settings_clone = my_settings.clone();
+        let get_settings = move |cb: Box<dyn Fn(JsonValue)>| {
+            (cb)(makelayout(&my_settings_clone.lock().unwrap()));
         };
-        let save_settings = |req: &MooMsg, is_dry_run: bool, settings: &JsonValue| {
-            let layout = makelayout(settings["values"].to_owned());
+        let svc_settings_clone = svc_settings.clone();
+        let save_settings = move |req: &MooMsg, is_dry_run: bool, settings: &JsonValue| {
+            let layout = makelayout(&settings["values"]);
             let status = if layout["has_error"].as_bool().unwrap() {"NotValid"} else {"Success"};
 
-            (req.send_complete.lock().unwrap())(status, Some(&object! { settings: layout })).unwrap();
+            (req.send_complete.lock().unwrap())(status, Some(&object! { settings: layout.clone() })).unwrap();
 
             if !is_dry_run && status == "Success" {
+                let mut my_settings = my_settings.lock().unwrap();
+                *my_settings = layout["values"].to_owned();
+                svc_settings_clone.lock().unwrap().update_settings(layout);
+                RoonApi::save_config("settings", Some(my_settings.to_owned())).unwrap();
             }
         };
-        let svc_settings = Arc::new(Mutex::new(Settings::new(&roon_api, get_settings, save_settings)));
+        svc_settings.lock().unwrap().register(&roon_api, get_settings, save_settings);
 
-        roon_api.init_services(&[svc_settings.lock().unwrap().svc.clone()]);
+        if let Some(svc) = &svc_settings.lock().unwrap().svc {
+            roon_api.init_services(&[svc.clone()]);
+        }
 
-        let on_core_found = move |_core: &Core| {
-        };
-        let on_core_lost = move |_core: &Core| {
-        };
-        let handle = roon_api.start_discovery(on_core_found, on_core_lost);
+        let handle = roon_api.start_discovery(|_|(), |_|());
 
         handle.join().unwrap();
+
+        Ok(())
     }
 
-    fn makelayout(settings: JsonValue) -> JsonValue {
+    fn makelayout(settings: &JsonValue) -> JsonValue {
         let mut layout = object! {
-            values: settings,
+            values: settings.to_owned(),
             layout: array![],
             has_error: false
         };

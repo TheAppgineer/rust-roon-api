@@ -7,4 +7,4 @@ v Implement logger
 - Implement core pairing
 
 Cargo
-- Make Settings API a crate feature
+v Make Settings API a crate feature
