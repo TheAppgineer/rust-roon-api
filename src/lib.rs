@@ -29,7 +29,6 @@ const TEN_SECONDS: i32 = 10 * 100;
 
 pub struct RoonApi {
     logger: Arc<Logger>,
-    _extension_opts: JsonValue,
     extension_reginfo: JsonValue,
     service_request_handlers: Arc<Mutex<HashMap<String, Box<dyn FnMut(Option<&mut MooMsg>, u32) + Send + 'static>>>>,
     on_core_found: Option<Arc<Mutex<Box<dyn FnMut(&Core) + Send + 'static>>>>,
@@ -52,7 +51,6 @@ impl RoonApi {
 
         Self {
             logger: Arc::new(Logger::new(extension_opts["log_level"].to_string())),
-            _extension_opts: extension_opts,
             extension_reginfo,
             service_request_handlers: Arc::new(Mutex::new(HashMap::new())),
             on_core_found: None,
@@ -316,7 +314,7 @@ impl RoonApi {
             json.remove(key);
         }
 
-        std::fs::write("config.json", json::stringify(json))?;
+        std::fs::write("config.json", json::stringify_pretty(json, 4))?;
 
         Ok(())
     }
@@ -373,6 +371,15 @@ impl RoonApi {
                         display_name:    body["display_name"].to_string(),
                         display_version: body["display_version"].to_string()
                     };
+                    let mut state = Self::load_config(Some("roonstate")).unwrap();
+
+                    if state["tokens"].is_null() {
+                        state["tokens"] = object! {}
+                    }
+
+                    state["tokens"][body["core_id"].as_str().unwrap()] = body["token"].to_owned();
+
+                    Self::save_config("roonstate", Some(state)).unwrap();
 
                     if let Some(on_core_found) = &self.on_core_found {
                         let mut on_core_found = on_core_found.lock().unwrap();
