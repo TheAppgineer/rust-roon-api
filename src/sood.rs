@@ -16,8 +16,8 @@ pub struct Sood {
 }
 
 pub struct Message {
-    pub msg_type: char,
     pub from: SocketAddr,
+    pub msg_type: char,
     pub props: HashMap<String, String>
 }
 
@@ -48,7 +48,6 @@ impl Sood {
         let (tx, rx) = mpsc::channel::<Message>();
 
         let handle = thread::spawn(move || loop {
-
             if let Some(msg) = Sood::recv_msg(&unicast.lock().unwrap().send_sock) {
                 if let Err(error) = tx.send(msg) {
                     println!("{}", error);
@@ -57,6 +56,7 @@ impl Sood {
             
             for (_, mc) in &*multicast.lock().unwrap() {
                 if let Some(msg) = Sood::recv_msg(&mc.send_sock) {
+                    println!("Multicast send_sock receive !!!");
                     if let Err(error) = tx.send(msg) {
                         println!("{}", error);
                     }
@@ -252,12 +252,12 @@ impl Multicast {
         let send_sock = UdpSocket::bind(std::net::SocketAddr::from((ip.octets(), 0)))?;
         let broadcast = Ipv4Addr::from(broadcast_octets);
 
-        send_sock.set_nonblocking(true).unwrap();
-        send_sock.set_broadcast(true).unwrap();
-        send_sock.set_multicast_ttl_v4(1).unwrap();
+        send_sock.set_nonblocking(true)?;
+        send_sock.set_broadcast(true)?;
+        send_sock.set_multicast_ttl_v4(1)?;
 
-        recv_sock.set_nonblocking(true).unwrap();
-        recv_sock.join_multicast_v4(&Ipv4Addr::from(SOOD_MULTICAST_IP), &ip).unwrap();
+        recv_sock.set_nonblocking(true)?;
+        recv_sock.join_multicast_v4(&Ipv4Addr::from(SOOD_MULTICAST_IP), &ip)?;
 
         Ok(Self {
             recv_sock,
@@ -272,9 +272,9 @@ impl Unicast {
     fn new() -> std::io::Result<Self> {
         let send_sock = UdpSocket::bind(LISTEN_ALL_RANDOM_PORT)?;
 
-        send_sock.set_broadcast(true).unwrap();
-        send_sock.set_multicast_ttl_v4(1).unwrap();
-        send_sock.set_nonblocking(true).unwrap();
+        send_sock.set_broadcast(true)?;
+        send_sock.set_multicast_ttl_v4(1)?;
+        send_sock.set_nonblocking(true)?;
 
         Ok(Self {
             send_sock

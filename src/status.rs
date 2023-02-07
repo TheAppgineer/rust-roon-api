@@ -103,7 +103,7 @@ mod tests {
             let mut svc_status = svc_status.lock().unwrap();
             svc_status.set_status(&message, false);
         };
-        let handle = roon_api.start_discovery(on_core_found, on_core_lost);
+        let handle = roon_api.start_discovery(on_core_found, on_core_lost, false);
 
         handle.join().unwrap();
     }

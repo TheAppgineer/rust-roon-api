@@ -22,7 +22,7 @@ pub struct Moo {
     pub unique_id: String,
     pub core: Option<Core>,
     req_id: u32,
-    requests: HashMap<u32, Box<dyn Fn(&mut Moo, Option<&JsonValue>) + Send + 'static>>,
+    requests: Arc<Mutex<HashMap<u32, Box<dyn Fn(&mut Moo, Option<&JsonValue>) + Send + 'static>>>>,
     logger: Arc<Logger>
 }
 
@@ -36,7 +36,7 @@ impl Moo {
             core: None,
             unique_id,
             req_id: 0,
-            requests: HashMap::new(),
+            requests: Arc::new(Mutex::new(HashMap::new())),
             logger
         }
     }
@@ -67,7 +67,7 @@ impl Moo {
         }
 
         self.req_id += 1;
-        self.requests.insert(req_id, Box::new(cb));
+        self.requests.lock().unwrap().insert(req_id, Box::new(cb));
 
         Ok(())
     }
@@ -170,14 +170,15 @@ impl Moo {
 
     pub fn handle_response(&mut self, msg: &JsonValue) -> Result<(), Box<dyn std::error::Error>> {
         let request_id = msg["request_id"].as_str().unwrap().parse::<u32>()?;
+        let cb = self.requests.lock().unwrap().remove(&request_id);
 
-        if let Some(cb) = self.requests.remove(&request_id) {
+        if let Some(cb) = cb {
             let complete = msg["verb"] == "COMPLETE";
 
-            (cb)(self, Some(&msg));
+            (cb)(self, Some(msg));
 
             if !complete {
-                self.requests.insert(request_id, cb);
+                self.requests.lock().unwrap().insert(request_id, cb);
             }
         }
 
@@ -187,12 +188,14 @@ impl Moo {
     pub fn clean_up(&mut self) {
         let mut ids = Vec::new();
 
-        for (id, _) in self.requests.iter() {
+        for (id, _) in self.requests.lock().unwrap().iter() {
             ids.push(*id);
         }
 
         while let Some(id) = ids.pop() {
-            if let Some(cb) = self.requests.remove(&id) {
+            let cb = self.requests.lock().unwrap().remove(&id);
+
+            if let Some(cb) = cb {
                 (cb)(self, None);
             }
         }

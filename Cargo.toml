@@ -14,5 +14,7 @@ regex = "1.5.5"
 tungstenite = "0.17.2"
 
 [features]
+pairing = []
 status = []
 settings = []
+default = ["status"]

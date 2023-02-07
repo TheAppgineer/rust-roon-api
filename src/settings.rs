@@ -118,7 +118,7 @@ mod tests {
             roon_api.init_services(&[svc.clone()]);
         }
 
-        let handle = roon_api.start_discovery(|_|(), |_|());
+        let handle = roon_api.start_discovery(|_|(), |_|(), false);
 
         handle.join().unwrap();
 

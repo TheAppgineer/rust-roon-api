@@ -3,6 +3,9 @@ pub mod sood;
 pub mod moo;
 pub mod transport_websocket;
 
+#[cfg(feature = "pairing")]
+pub mod pairing;
+
 #[cfg(feature = "status")]
 pub mod status;
 
@@ -27,17 +30,25 @@ pub use moo::{Core, MooMsg};
 const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
 const TEN_SECONDS: i32 = 10 * 100;
 
+#[derive(PartialEq)]
+enum Pairing {
+    Disabled = 0,
+    NotPaired = 1,
+    Paired = 2
+}
+
 pub struct RoonApi {
     logger: Arc<Logger>,
     extension_reginfo: JsonValue,
+    moos: Arc<Mutex<Vec<Moo>>>,
     service_request_handlers: Arc<Mutex<HashMap<String, Box<dyn FnMut(Option<&mut MooMsg>, u32) + Send + 'static>>>>,
     on_core_found: Option<Arc<Mutex<Box<dyn FnMut(&Core) + Send + 'static>>>>,
-    on_core_lost: Option<Arc<Mutex<Box<dyn FnMut(&Core) + Send + 'static>>>>
+    on_core_lost: Option<Arc<Mutex<Box<dyn FnMut(&Core) + Send + 'static>>>>,
+    pairing: Pairing
 }
 
 impl RoonApi {
-    pub fn new(extension_opts: JsonValue) -> Self
-    {
+    pub fn new(extension_opts: JsonValue) -> Self {
         let extension_reginfo = object! {
             extension_id:      extension_opts["extension_id"].clone(),
             display_name:      extension_opts["display_name"].clone(),
@@ -52,13 +63,15 @@ impl RoonApi {
         Self {
             logger: Arc::new(Logger::new(extension_opts["log_level"].to_string())),
             extension_reginfo,
+            moos: Arc::new(Mutex::new(Vec::new())),
             service_request_handlers: Arc::new(Mutex::new(HashMap::new())),
             on_core_found: None,
-            on_core_lost: None
+            on_core_lost: None,
+            pairing: Pairing::Disabled
         }
     }
 
-    pub fn start_discovery<F, G>(&'static mut self, on_core_found: F, on_core_lost: G) -> JoinHandle<()>
+    pub fn start_discovery<F, G>(&'static mut self, on_core_found: F, on_core_lost: G, pair: bool) -> JoinHandle<()>
     where F: FnMut(&Core) + Send + 'static,
           G: FnMut(&Core) + Send + 'static
     {
@@ -66,19 +79,23 @@ impl RoonApi {
         self.on_core_found = Some(Arc::new(Mutex::new(Box::new(on_core_found))));
         self.on_core_lost = Some(Arc::new(Mutex::new(Box::new(on_core_lost))));
 
+        if pair {
+            self.pairing = Pairing::NotPaired
+        }
+
         let mut sood = sood::Sood::new().unwrap();
+        let moos = self.moos.clone();
 
         let handle = thread::spawn(move || {
             const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
             let mut scan_count = None;
             let on_startup = |sood: &sood::Sood| {
-                scan_count = Some(0);
+                scan_count = Some(-1);
                 sood.query(HashMap::from(QUERY));
             };
             let (_, rx) = sood.start(on_startup);
             let mut sood_conns: HashMap<String, bool> = HashMap::new();
             let mut loop_count = 0;
-            let mut moos = Vec::new();
 
             loop {
                 if let Ok(msg) = rx.try_recv() {
@@ -90,7 +107,8 @@ impl RoonApi {
     
                                     self.logger.log(format!("sood connection for unique_id: {}", unique_id).as_str());
     
-                                    moos.push(self.ws_connect(msg.from.ip(), port, unique_id));
+                                    let moo = self.ws_connect(msg.from.ip(), port, unique_id);
+                                    moos.lock().unwrap().push(moo);
                                 }
                             }
                         }
@@ -99,7 +117,7 @@ impl RoonApi {
 
                 let mut lost_moos = Vec::new();
 
-                for mut moo in &mut moos {
+                for mut moo in moos.lock().unwrap().iter_mut() {
                     match moo.receive_response() {
                         Err(error) => {
                             if error.is::<tungstenite::Error>() {
@@ -144,21 +162,21 @@ impl RoonApi {
                 // Perform clean up
                 for mooid in lost_moos {
                     let mooid = mooid as usize;
-                    let moo = &mut moos[mooid];
+                    let moo = &mut moos.lock().unwrap()[mooid];
 
                     sood_conns.remove(&moo.unique_id);
 
                     moo.clean_up();
-                    moos.remove(mooid);
+                    moos.lock().unwrap().remove(mooid);
                 }
 
                 if loop_count % TEN_SECONDS == 0 {
                     if let Some(count) = scan_count {
-                        if count < 6 || count % 6 == 0 {
+                        scan_count = Some(count + 1);
+
+                        if self.pairing != Pairing::Paired && (count < 6 || count % 6 == 0) {
                             sood.query(HashMap::from(QUERY));
                         }
-
-                        scan_count = Some(count + 1);
                     }
                 }
 
@@ -305,6 +323,13 @@ impl RoonApi {
         }
     }
 
+    pub fn get_core_id(&self, mooid: u32) -> Option<String> {
+        let moos = self.moos.lock().unwrap();
+        let core = moos.get(mooid as usize)?.core.as_ref()?;
+
+        Some(core.core_id.to_owned())
+    }
+
     pub fn save_config(key: &str, value: Option<JsonValue>) -> Result<(), Box<dyn std::error::Error>> {
         let mut json = Self::load_config(None)?;
 
@@ -337,7 +362,15 @@ impl RoonApi {
         }
     }
 
-    fn ws_connect(&'static self, ip: IpAddr, port: &String, unique_id: &String) -> Moo {
+    fn set_persisted_state(state: JsonValue) {
+        Self::save_config("roonstate", Some(state)).unwrap();
+    }
+
+    fn get_persisted_state() -> JsonValue {
+        Self::load_config(Some("roonstate")).unwrap()
+    }
+
+    fn ws_connect(&'static self, ip: IpAddr, port: &str, unique_id: &str) -> Moo {
         let transport = Transport::new(ip, port).unwrap();
         let mut moo = Moo::new(transport, unique_id.to_owned(), self.logger.clone());
         let extension_reginfo = self.extension_reginfo.clone();
@@ -346,7 +379,7 @@ impl RoonApi {
             moo.send_request(
                 "com.roonlabs.registry:1/register",
                 Some(&extension_reginfo),
-                move |moo, msg| {
+                |moo, msg| {
                     self.ev_registered(moo, msg);
                 }
             ).unwrap();
@@ -371,7 +404,7 @@ impl RoonApi {
                         display_name:    body["display_name"].to_string(),
                         display_version: body["display_version"].to_string()
                     };
-                    let mut state = Self::load_config(Some("roonstate")).unwrap();
+                    let mut state = Self::get_persisted_state();
 
                     if state["tokens"].is_null() {
                         state["tokens"] = object! {}
@@ -379,7 +412,7 @@ impl RoonApi {
 
                     state["tokens"][body["core_id"].as_str().unwrap()] = body["token"].to_owned();
 
-                    Self::save_config("roonstate", Some(state)).unwrap();
+                    Self::set_persisted_state(state);
 
                     if let Some(on_core_found) = &self.on_core_found {
                         let mut on_core_found = on_core_found.lock().unwrap();
