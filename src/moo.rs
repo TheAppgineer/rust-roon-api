@@ -20,14 +20,14 @@ pub struct Moo {
 }
 
 impl Moo {
-    pub async fn new(ip: &IpAddr, port: &str, _unique_id: String) -> Result<Self, Error> {
+    pub async fn new(ip: &IpAddr, port: &str, unique_id: String) -> Result<Self, Error> {
         let url = Url::parse(&format!("ws://{}:{}/api", ip, port)).unwrap();
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
 
         Ok(Self {
-            unique_id: _unique_id,
+            unique_id,
             write,
             read,
             req_id: 0
@@ -83,11 +83,23 @@ impl Moo {
 
         match select(tx, rx).await {
             Either::Right((Some(response), _)) => {
-                if let Ok(json) = &response {
-                    println!("<- {} {} {} {}", json["verb"].as_str().unwrap(),
-                                               json["request_id"].as_str().unwrap(),
-                                               json["name"].as_str().unwrap(),
-                                               json["body"].to_string());
+                if let Ok(msg) = &response {
+                    if msg["verb"] == "REQUEST" {
+                        print!("<- {} {} {}/{}", msg["verb"].as_str().unwrap(),
+                                                 msg["request_id"].as_str().unwrap(),
+                                                 msg["service"].as_str().unwrap(),
+                                                 msg["name"].as_str().unwrap());
+                    } else {
+                        print!("<- {} {} {}", msg["verb"].as_str().unwrap(),
+                                              msg["request_id"].as_str().unwrap(),
+                                              msg["name"].as_str().unwrap());
+                    }
+
+                    if msg["content_length"].is_null() {
+                        println!("");
+                    } else {
+                        println!(" {}", msg["body"].to_string());
+                    }
                 }
 
                 response
@@ -95,6 +107,34 @@ impl Moo {
             Either::Right((None, _)) => Err(Error::ConnectionClosed),
             Either::Left((_, _)) => Err(Error::ConnectionClosed)
         }
+    }
+
+    pub async fn send_response(&mut self, req: serde_json::Value, props: &(String, String, Option<serde_json::Value>)) -> Result<(), Error> {
+        let request_id = req["request_id"].as_str().unwrap().parse::<u32>().unwrap();
+        let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", props.0, props.1, request_id);
+
+        if let Some(body) = &props.2 {
+            let body = body.to_string();
+
+            println!("-> {} {} {} {}", props.0, request_id, props.1, body);
+
+            let body_len = body.as_bytes().len();
+
+            header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
+            header.push_str(&body);
+        } else {
+            println!("-> {} {} {}", props.0, request_id, props.1);
+
+            header.push('\n');
+        }
+
+        self.write.send(Message::Binary(Vec::from(header))).await?;
+
+        Ok(())
+    }
+
+    pub fn handle_response(&mut self) -> bool {
+        true
     }
 
     pub fn clean_up(&self) {

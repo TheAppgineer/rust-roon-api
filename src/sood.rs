@@ -146,7 +146,6 @@ impl Sood {
         }
 
         vec = [Vec::from("SOOD\u{2}Q"), vec].concat();
-        println!("{:?}", from_utf8(&vec));
 
         let ip_addr = IpAddr::V4(Ipv4Addr::from(SOOD_MULTICAST_IP));
         let addr = SocketAddr::new(ip_addr, SOOD_PORT);
@@ -206,6 +205,8 @@ impl Sood {
         if let None = self.unicast {
             self.unicast = Some(Arc::new(Mutex::new(Unicast::new().await?)));
         }
+
+        sleep(Duration::from_millis(200)).await;
 
         Ok(iface_change)
     }
