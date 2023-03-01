@@ -11,6 +11,8 @@ use tokio_tungstenite::tungstenite::error::Error;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
 
+pub type RespProps = (&'static[&'static str], Option<serde_json::Value>);
+
 #[derive(Debug)]
 pub struct Moo {
     pub unique_id: String,
@@ -109,26 +111,30 @@ impl Moo {
         }
     }
 
-    pub async fn send_response(&mut self, req: serde_json::Value, props: &(String, String, Option<serde_json::Value>)) -> Result<(), Error> {
-        let request_id = req["request_id"].as_str().unwrap().parse::<u32>().unwrap();
-        let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", props.0, props.1, request_id);
-
-        if let Some(body) = &props.2 {
-            let body = body.to_string();
-
-            println!("-> {} {} {} {}", props.0, request_id, props.1, body);
-
-            let body_len = body.as_bytes().len();
-
-            header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
-            header.push_str(&body);
-        } else {
-            println!("-> {} {} {}", props.0, request_id, props.1);
-
-            header.push('\n');
+    pub async fn send_response(&mut self, request_id: usize, props: &RespProps) -> Result<(), Error> {
+        let (hdr, body) = props;
+        if hdr.len() > 1 {
+            let action = hdr[0];
+            let state = hdr[1];
+            let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
+    
+            if let Some(body) = &body {
+                let body = body.to_string();
+    
+                println!("-> {} {} {} {}", action, request_id, state, body);
+    
+                let body_len = body.as_bytes().len();
+    
+                header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
+                header.push_str(&body);
+            } else {
+                println!("-> {} {} {}", action, request_id, state);
+    
+                header.push('\n');
+            }
+    
+            self.write.send(Message::Binary(Vec::from(header))).await?;
         }
-
-        self.write.send(Message::Binary(Vec::from(header))).await?;
 
         Ok(())
     }
