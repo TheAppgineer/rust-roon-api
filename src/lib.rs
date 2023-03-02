@@ -17,7 +17,7 @@ type Method = Box<dyn Fn(&Core, Option<&serde_json::Value>) -> RespProps + Send>
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    pairing: bool,
+    #[cfg(feature = "pairing")]
     paired_core: Arc<StdMutex<Option<Core>>>
 }
 
@@ -25,19 +25,20 @@ pub struct RoonApi {
 pub struct Core {
     pub display_name: String,
     pub display_version: String,
+    #[cfg(feature = "pairing")]
     core_id: String,
     moo_id: usize
 }
 
 impl RoonApi {
-    pub fn new(options: serde_json::Value, pairing: bool) -> Self {
+    pub fn new(options: serde_json::Value) -> Self {
         let mut reg_info = options;
 
         reg_info["provided_services"] = json!([]);
 
         Self {
             reg_info,
-            pairing,
+            #[cfg(feature = "pairing")]
             paired_core: Arc::new(StdMutex::new(None))
         }
     }
@@ -53,20 +54,30 @@ impl RoonApi {
         let (handle, mut sood_rx) = sood.start().await?;
         let (moo_tx, mut moo_rx) = mpsc::channel::<Moo>(4);
 
+        #[cfg(feature = "pairing")]
         let paired_core = self.paired_core.clone();
+
         let query = async move {
             let mut scan_count = 0;
 
             loop {
                 if scan_count < 6 || scan_count % 6 == 0 {
-                    let paired_core = paired_core.lock().unwrap().to_owned();
+                    #[cfg(feature = "pairing")]
+                    {
+                        let paired_core = paired_core.lock().unwrap().to_owned();
 
-                    if let None = paired_core {
-                        if let Err(err) = sood.query(&QUERY).await {
-                            println!("{}", err);
+                        if let None = paired_core {
+                            if let Err(err) = sood.query(&QUERY).await {
+                                println!("{}", err);
+                            }
                         }
                     }
-                }
+
+                    #[cfg(not(feature = "pairing"))]
+                    if let Err(err) = sood.query(&QUERY).await {
+                        println!("{}", err);
+                    }
+            }
 
                 scan_count += 1;
 
@@ -110,8 +121,9 @@ impl RoonApi {
             }
         };
 
-        let pairing: bool = self.pairing;
+        #[cfg(feature = "pairing")]
         let paired_core = self.paired_core.clone();
+
         let on_moo_receive = async move {
             let mut moos: Vec<Moo> = Vec::new();
             let mut cores: Vec<Core> = Vec::new();
@@ -209,11 +221,13 @@ impl RoonApi {
                                 let core = Core {
                                     display_name: body["display_name"].as_str().unwrap().to_string(),
                                     display_version: body["display_version"].as_str().unwrap().to_string(),
+                                    #[cfg(feature = "pairing")]
                                     core_id: body["core_id"].as_str().unwrap().to_string(),
                                     moo_id: index
                                 };
 
-                                if pairing {
+                                #[cfg(feature = "pairing")]
+                                {
                                     let mut paired_core_id = None;
 
                                     {
@@ -256,9 +270,10 @@ impl RoonApi {
                                             on_core_found(&core);
                                         }
                                     }
-                                } else {
-                                    on_core_found(&core);
                                 }
+
+                                #[cfg(not(feature = "pairing"))]
+                                on_core_found(&core);
 
                                 cores.push(core);
                             } else {
@@ -289,9 +304,8 @@ impl RoonApi {
 
         self.add_ping_service(&mut svcs);
 
-        if self.pairing {
-            self.add_pairing_service(&mut svcs);
-        }
+        #[cfg(feature = "pairing")]
+        self.add_pairing_service(&mut svcs);
 
         for (name, _) in &svcs {
             self.reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
@@ -380,6 +394,7 @@ impl RoonApi {
         svcs.insert("com.roonlabs.ping:1".to_owned(), self.register_service(spec));
     }
  
+    #[cfg(feature = "pairing")]
     fn add_pairing_service(&mut self, svcs: &mut HashMap<String, Svc>) {
         let mut spec = SvcSpec::new();
         let paired_core = self.paired_core.clone();
@@ -444,7 +459,7 @@ impl RoonApi {
     }
 }
 
-struct Sub {
+pub struct Sub {
     subscribe_name: String,
     unsubscribe_name: String,
     start: Method,
@@ -457,18 +472,18 @@ pub struct SvcSpec {
 }
 
 impl SvcSpec {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             methods: HashMap::new(),
             subs: Vec::new()
         }
     }
 
-    fn add_method(&mut self, name: &str, method: Method) {
+    pub fn add_method(&mut self, name: &str, method: Method) {
         self.methods.insert(name.to_owned(), method);
     }
 
-    fn add_sub(&mut self, sub: Sub) {
+    pub fn add_sub(&mut self, sub: Sub) {
         self.subs.push(sub);
     }
 }
@@ -493,7 +508,7 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let mut roon = RoonApi::new(info, true);
+        let mut roon = RoonApi::new(info);
         let on_core_found = move |core: &Core| {
             println!("Core found: {}, version {}", core.display_name, core.display_version);
         };
