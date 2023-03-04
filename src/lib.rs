@@ -27,7 +27,6 @@ pub struct RoonApi {
 pub struct Core {
     pub display_name: String,
     pub display_version: String,
-    #[cfg(feature = "pairing")]
     core_id: String,
     moo_id: usize
 }
@@ -50,7 +49,7 @@ impl RoonApi {
     pub async fn start_discovery(&self, mut svcs: HashMap<String, Svc>) -> std::io::Result<Vec<JoinHandle<()>>> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
-        let body = self.reg_info.clone();
+        let mut body = self.reg_info.clone();
         let sood_conns: Arc<TokioMutex<Vec<String>>> = Arc::new(TokioMutex::new(Vec::new()));
         let mut sood = Sood::new();
         let mut handles: Vec<JoinHandle<()>> = Vec::new();
@@ -114,7 +113,18 @@ impl RoonApi {
 
                             if let Ok(mut moo) = Moo::new(&msg.ip, &port, unique_id).await {
                                 moo.send_request("com.roonlabs.registry:1/info", None).await.unwrap();
-                                moo.receive_response().await.unwrap();
+
+                                let resp = moo.receive_response().await.unwrap();
+                                let settings = Self::load_config("roonstate");
+
+                                if let Some(tokens) = settings.get("tokens") {
+                                    let core_id = resp["body"]["core_id"].as_str().unwrap();
+
+                                    if let Some(token) = tokens.get(core_id) {
+                                        body["token"] = token.to_owned();
+                                    }
+                                }
+
                                 moo.send_request("com.roonlabs.registry:1/register", Some(&body)).await.unwrap();
 
                                 moo_tx.send(moo).await.unwrap();
@@ -160,10 +170,15 @@ impl RoonApi {
                                 let core = Core {
                                     display_name: body["display_name"].as_str().unwrap().to_string(),
                                     display_version: body["display_version"].as_str().unwrap().to_string(),
-                                    #[cfg(feature = "pairing")]
                                     core_id: body["core_id"].as_str().unwrap().to_string(),
                                     moo_id: index
                                 };
+
+                                let mut settings = Self::load_config("roonstate");
+                                let token = body["token"].as_str().unwrap();
+
+                                settings["tokens"][&core.core_id] = token.into();
+                                Self::save_config("roonstate", settings).unwrap();
 
                                 #[cfg(feature = "pairing")]
                                 {
@@ -179,6 +194,11 @@ impl RoonApi {
                                     }
 
                                     if let Some(paired_core_id) = paired_core_id {
+                                        let mut settings = Self::load_config("roonstate");
+
+                                        settings["paired_core_id"] = paired_core_id.into();
+                                        Self::save_config("roonstate", settings).unwrap();
+
                                         let svc_name = "com.roonlabs.pairing:1";
                                         let svc = svcs.remove(svc_name);
 
@@ -202,9 +222,7 @@ impl RoonApi {
                                             props_option = Some((&["CONTINUE", "Changed"], Some(body)));
                                         }
 
-                                        if core.core_id == paired_core_id {
-                                            on_core_found(&core);
-                                        }
+                                        on_core_found(&core);
                                     }
                                 }
 
@@ -411,29 +429,27 @@ impl RoonApi {
         let on_core_lost = self.on_core_lost.clone();
         let pair = move |core: &Core, _: Option<&serde_json::Value>| -> RespProps {
             let mut paired_core = paired_core.lock().unwrap();
-            let mut props: RespProps = (&[], None);
 
             if let Some(paired_core) = paired_core.as_ref() {
                 if paired_core.core_id == core.core_id {
-                    return props
+                    return (&[], None)
                 } else {
                     on_core_lost(paired_core);
                 }
             }
 
-            let body = json!({"paired_core_id": core.core_id});
+            let mut settings = Self::load_config("roonstate");
+
+            settings["paired_core_id"] = core.core_id.clone().into();
+            Self::save_config("roonstate", settings).unwrap();
 
             *paired_core = Some(core.to_owned());
 
-            props = (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body));
+            on_core_found(&core);
 
-            if let Some(paired_core) = paired_core.as_ref() {
-                if core.core_id == paired_core.core_id {
-                    on_core_found(&core);
-                }
-            }
+            let body = json!({"paired_core_id": core.core_id});
 
-            props
+            (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))
         };
 
         spec.add_method("pair", Box::new(pair));
@@ -461,6 +477,31 @@ impl RoonApi {
             end: None
         });
         svcs.insert("com.roonlabs.pairing:1".to_owned(), self.register_service(spec));
+    }
+
+    fn save_config(key: &str, value: serde_json::Value) -> std::io::Result<()> {
+        match Self::read_and_parse("config.json") {
+            Some(mut config) => {
+                config[key] = value;
+
+                std::fs::write("config.json", serde_json::to_string_pretty(&config).unwrap())
+            }
+            None => std::fs::write("config.json", "{}")
+        }
+    }
+
+    fn load_config(key: &str) -> serde_json::Value {
+        match Self::read_and_parse("config.json") {
+            Some(value) => value.get(key).cloned().into(),
+            None => json!({})
+        }
+    }
+
+    fn read_and_parse(path: &str) -> Option<serde_json::Value> {
+        let content = std::fs::read(path).ok()?;
+        let content = std::str::from_utf8(&content).ok()?;
+
+        serde_json::from_str::<serde_json::Value>(content).ok()
     }
 }
 
