@@ -9,7 +9,7 @@ edition = "2021"
 futures-util = "0.3"
 tokio = { version = "1.24.1", features = ["macros", "rt", "sync", "time"] }
 tokio-tungstenite = "0.18.0"
-if-addrs = "0.8.0"
+if-addrs = "0.10.1"
 uuid = {version = "1.2.2", features = ["v4"]}
 url = "2.2.2"
 serde_json = "1.0"
@@ -17,10 +17,5 @@ regex = "1.5.5"
 
 [features]
 pairing = []
+status = []
 default = []
-
-[profile.release]
-strip = true
-opt-level = "s"
-lto = true
-codegen-units = 1

@@ -11,14 +11,18 @@ use tokio::time::{sleep, Duration};
 mod moo;
 mod sood;
 
+#[cfg(feature = "status")]
+pub mod status;
+
 type StdMutex<T> = std::sync::Mutex<T>;
 type TokioMutex<T> = tokio::sync::Mutex<T>;
+type CoreEvent = dyn Fn(&Core) + Send;
 type Method = Box<dyn Fn(&Core, Option<&serde_json::Value>) -> RespProps + Send>;
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    on_core_found: Arc<fn(&Core)>,
-    on_core_lost: Arc<fn(&Core)>,
+    on_core_found: Arc<StdMutex<CoreEvent>>,
+    on_core_lost: Arc<StdMutex<CoreEvent>>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<StdMutex<Option<Core>>>
 }
@@ -32,15 +36,15 @@ pub struct Core {
 }
 
 impl RoonApi {
-    pub fn new(options: serde_json::Value, on_core_found: fn(&Core), on_core_lost: fn(&Core)) -> Self {
+    pub fn new(options: serde_json::Value, on_core_found: Box<CoreEvent>, on_core_lost: Box<CoreEvent>) -> Self {
         let mut reg_info = options;
 
         reg_info["provided_services"] = json!([]);
 
         Self {
             reg_info,
-            on_core_found: Arc::new(on_core_found),
-            on_core_lost: Arc::new(on_core_lost),
+            on_core_found: Arc::new(StdMutex::new(on_core_found)),
+            on_core_lost: Arc::new(StdMutex::new(on_core_lost)),
             #[cfg(feature = "pairing")]
             paired_core: Arc::new(StdMutex::new(None))
         }
@@ -222,12 +226,16 @@ impl RoonApi {
                                             props_option = Some((&["CONTINUE", "Changed"], Some(body)));
                                         }
 
+                                        let on_core_found = on_core_found.lock().unwrap();
                                         on_core_found(&core);
                                     }
                                 }
 
                                 #[cfg(not(feature = "pairing"))]
-                                on_core_found(&core);
+                                {
+                                    let on_core_found = on_core_found.lock().unwrap();
+                                    on_core_found(&core);
+                                }
 
                                 cores.push(core);
                             } else {
@@ -236,6 +244,7 @@ impl RoonApi {
                         }
                         Either::Right(((Err(_), index, _), _)) => {
                             let core = cores.remove(index);
+                            let on_core_lost = on_core_lost.lock().unwrap();
 
                             lost_moo = Some(index);
                             on_core_lost(&core);
@@ -310,23 +319,18 @@ impl RoonApi {
         Ok(handles)
     }
 
-    pub fn init_services(&mut self) -> HashMap<String, Svc> {
-        let mut svcs: HashMap<String, Svc> = HashMap::new();
-
-        self.add_ping_service(&mut svcs);
+    pub fn init_services(&mut self, svcs: &mut HashMap<String, Svc>) {
+        self.add_ping_service(svcs);
 
         #[cfg(feature = "pairing")]
-        self.add_pairing_service(&mut svcs);
+        self.add_pairing_service(svcs);
 
-        for (name, _) in &svcs {
+        for (name, _) in svcs {
             self.reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
         }
-
-        svcs
     }
 
-    pub fn register_service(&mut self, spec: SvcSpec) -> Svc
-    {
+    pub fn register_service(&self, spec: SvcSpec) -> Svc {
         let mut methods = spec.methods;
         let sub_types = Arc::new(StdMutex::new(HashMap::new()));
         let mut sub_names = Vec::new();
@@ -434,6 +438,7 @@ impl RoonApi {
                 if paired_core.core_id == core.core_id {
                     return (&[], None)
                 } else {
+                    let on_core_lost = on_core_lost.lock().unwrap();
                     on_core_lost(paired_core);
                 }
             }
@@ -445,6 +450,7 @@ impl RoonApi {
 
             *paired_core = Some(core.to_owned());
 
+            let on_core_found = on_core_found.lock().unwrap();
             on_core_found(&core);
 
             let body = json!({"paired_core_id": core.core_id});
@@ -540,6 +546,7 @@ pub struct Svc {
 }
 
 #[cfg(test)]
+#[cfg(not(feature = "pairing"))]
 mod tests {
     use serde_json::json;
 
@@ -560,8 +567,10 @@ mod tests {
         let on_core_lost = move |core: &Core| {
             println!("Core lost: {}", core.display_name);
         };
-        let mut roon = RoonApi::new(info, on_core_found, on_core_lost);
-        let svcs = roon.init_services();
+        let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
+        let mut svcs: HashMap<String, Svc> = HashMap::new();
+
+        roon.init_services(&mut svcs);
 
         for handle in roon.start_discovery(svcs).await.unwrap() {
             handle.await.unwrap();
