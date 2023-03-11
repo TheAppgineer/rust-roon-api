@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use futures_util::future::{select, Either};
 use futures_util::stream::{StreamExt, SplitSink, SplitStream};
 use futures_util::{SinkExt, pin_mut};
@@ -6,62 +7,86 @@ use regex::Regex;
 use serde_json::json;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::error::Error;
+use tokio_tungstenite::tungstenite::{Message, error::Error};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 pub type RespProps = (&'static[&'static str], Option<serde_json::Value>);
 
+static MOO_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+pub struct Moo;
+
 #[derive(Debug)]
-pub struct Moo {
-    pub unique_id: String,
-    write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-    read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-    req_id: u32
+pub struct MooSender {
+    pub moo_id: usize,
+    pub req_id: usize,
+    write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>
+}
+
+pub struct MooReceiver {
+    pub moo_id: usize,
+    read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>
 }
 
 impl Moo {
-    pub async fn new(ip: &IpAddr, port: &str, unique_id: String) -> Result<Self, Error> {
+    pub async fn new(ip: &IpAddr, port: &str) -> Result<(MooSender, MooReceiver), Error> {
+        let moo_id = MOO_COUNT.fetch_add(1, Ordering::Relaxed);
         let url = Url::parse(&format!("ws://{}:{}/api", ip, port)).unwrap();
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
 
-        Ok(Self {
-            unique_id,
+        let sender = MooSender {
+            moo_id,
             write,
-            read,
             req_id: 0
-        })
+        };
+
+        let receiver = MooReceiver {
+            moo_id,
+            read
+        };
+
+        Ok((sender, receiver))
     }
+}
 
-    pub async fn send_request(&mut self, name: &str, body: Option<&serde_json::Value>) -> Result<(), Error> {
-        let mut header = format!("MOO/1 REQUEST {}\nRequest-Id: {}\n", name, self.req_id);
-
-        match  body {
-            Some(body) => {
-                let body  = body.to_string();
-                let len = body.as_bytes().len();
-
-                println!("-> REQUEST {} {} {}", self.req_id, name, body);
-
-                header.push_str(&format!("Content-Length: {}\nContent-Type: application/json\n\n", len));
+impl MooSender {
+    pub async fn send_msg(&mut self, request_id: usize, props: &RespProps) -> Result<usize, Error> {
+        let (hdr, body) = props;
+        if hdr.len() > 1 {
+            let action = hdr[0];
+            let state = hdr[1];
+            let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
+    
+            if let Some(body) = &body {
+                let body = body.to_string();
+    
+                println!("-> {} {} {} {}", action, request_id, state, body);
+    
+                let body_len = body.as_bytes().len();
+    
+                header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
                 header.push_str(&body);
-            }
-            None => {
-                println!("-> REQUEST {} {}", self.req_id, name);
-
+            } else {
+                println!("-> {} {} {}", action, request_id, state);
+    
                 header.push('\n');
+            }
+    
+            self.write.send(Message::Binary(Vec::from(header))).await?;
+
+            if action == "REQUEST" {
+                self.req_id += 1;
             }
         }
 
-        self.write.send(Message::Binary(Vec::from(header))).await?;
-        self.req_id += 1;
-
-        Ok(())
+        Ok(self.moo_id)
     }
+}
 
+impl MooReceiver {
     pub async fn receive_response(&mut self) -> Result<serde_json::Value, Error> {
         let (ws_tx, mut ws_rx) = mpsc::channel::<Result<serde_json::Value, Error>>(4);
 
@@ -109,38 +134,6 @@ impl Moo {
             Either::Right((None, _)) => Err(Error::ConnectionClosed),
             Either::Left((_, _)) => Err(Error::ConnectionClosed)
         }
-    }
-
-    pub async fn send_response(&mut self, request_id: usize, props: &RespProps) -> Result<(), Error> {
-        let (hdr, body) = props;
-        if hdr.len() > 1 {
-            let action = hdr[0];
-            let state = hdr[1];
-            let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
-    
-            if let Some(body) = &body {
-                let body = body.to_string();
-    
-                println!("-> {} {} {} {}", action, request_id, state, body);
-    
-                let body_len = body.as_bytes().len();
-    
-                header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
-                header.push_str(&body);
-            } else {
-                println!("-> {} {} {}", action, request_id, state);
-    
-                header.push('\n');
-            }
-    
-            self.write.send(Message::Binary(Vec::from(header))).await?;
-        }
-
-        Ok(())
-    }
-
-    pub fn handle_response(&mut self) -> bool {
-        true
     }
 
     pub fn clean_up(&self) {
