@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
 
-use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec};
+use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec, SvcType};
+
+const SVCNAME: &str = "com.roonlabs.status:1";
 
 pub struct Status {
     props: Arc<Mutex<(String, bool)>>
@@ -10,18 +12,16 @@ pub struct Status {
 
 impl Status {
     pub fn new() -> Self {
-        let props = Arc::new(Mutex::new((String::new(), false)));
-
         Self {
-            props
+            props: Arc::new(Mutex::new((String::new(), false)))
         }
     }
 
     pub fn add_status_service(&self, roon: &RoonApi, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new();
+        let mut spec = SvcSpec::new(SvcType::Provides);
 
         let props_clone = self.props.clone();
-        let get_status = move |_: &Core, _: Option<&serde_json::Value>| -> RespProps {
+        let get_status = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             let (message, is_error) = &*props_clone.lock().unwrap();
             let body = json!({
                 "message": message,
@@ -34,7 +34,7 @@ impl Status {
         spec.add_method("get_status", Box::new(get_status));
 
         let props_clone = self.props.clone();
-        let start = move |_: &Core, _: Option<&serde_json::Value>| -> RespProps {
+        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             let (message, is_error) = &*props_clone.lock().unwrap();
             let body = json!({
                 "message": message,
@@ -51,7 +51,7 @@ impl Status {
             end: None
         });
 
-        svcs.insert("com.roonlabs.status:1".to_owned(), roon.register_service(spec));
+        svcs.insert(SVCNAME.to_owned(), roon.register_service(spec));
     }
 
     pub fn set_status(&self, message: String, is_error: bool) -> RespProps {
@@ -75,7 +75,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         let info = json!({
             "extension_id": "com.theappgineer.rust-roon-api",

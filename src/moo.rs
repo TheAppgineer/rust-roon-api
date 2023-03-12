@@ -1,17 +1,13 @@
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use futures_util::future::{select, Either};
 use futures_util::stream::{StreamExt, SplitSink, SplitStream};
-use futures_util::{SinkExt, pin_mut};
+use futures_util::SinkExt;
 use regex::Regex;
 use serde_json::json;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{Message, error::Error};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
-
-pub type RespProps = (&'static[&'static str], Option<serde_json::Value>);
 
 static MOO_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -53,14 +49,17 @@ impl Moo {
 }
 
 impl MooSender {
-    pub async fn send_msg(&mut self, request_id: usize, props: &RespProps) -> Result<usize, Error> {
-        let (hdr, body) = props;
+    pub async fn send_req(&mut self, name: &str, body: Option<&serde_json::Value>) -> Result<usize, Error> {
+        self.send_msg(self.req_id, &["REQUEST", name], body).await
+    }
+
+    pub async fn send_msg(&mut self, request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> Result<usize, Error> {
         if hdr.len() > 1 {
             let action = hdr[0];
             let state = hdr[1];
             let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
     
-            if let Some(body) = &body {
+            if let Some(body) = body {
                 let body = body.to_string();
     
                 println!("-> {} {} {} {}", action, request_id, state, body);
@@ -88,56 +87,36 @@ impl MooSender {
 
 impl MooReceiver {
     pub async fn receive_response(&mut self) -> Result<serde_json::Value, Error> {
-        let (ws_tx, mut ws_rx) = mpsc::channel::<Result<serde_json::Value, Error>>(4);
+        match self.read.next().await {
+            Some(msg) => {
+                let msg = msg?;
 
-        let tx = self.read.by_ref().for_each(|message| async {
-            match message {
-                Ok(message) => {
-                    if let Ok(data) = message.into_text() {
-                        if let Some(json) = Self::parse(&data) {
-                            ws_tx.send(Ok(json)).await.unwrap();
+                if let Ok(data) = msg.into_text() {
+                    if let Some(msg) = Self::parse(&data) {
+                        if msg["verb"] == "REQUEST" {
+                            print!("<- {} {} {}/{}", msg["verb"].as_str().unwrap(),
+                                                     msg["request_id"].as_str().unwrap(),
+                                                     msg["service"].as_str().unwrap(),
+                                                     msg["name"].as_str().unwrap());
+                        } else {
+                            print!("<- {} {} {}", msg["verb"].as_str().unwrap(),
+                                                  msg["request_id"].as_str().unwrap(),
+                                                  msg["name"].as_str().unwrap());
                         }
+    
+                        if msg["content_length"].is_null() {
+                            println!("");
+                        } else {
+                            println!(" {}", msg["body"].to_string());
+                        }
+
+                        return Ok(msg)
                     }
                 }
-                Err(err) => {
-                    ws_tx.send(Err(err)).await.unwrap();
-                }
+                Err(Error::ConnectionClosed)
             }
-        });
-        let rx = ws_rx.recv();
-
-        pin_mut!(tx, rx);
-
-        match select(tx, rx).await {
-            Either::Right((Some(response), _)) => {
-                if let Ok(msg) = &response {
-                    if msg["verb"] == "REQUEST" {
-                        print!("<- {} {} {}/{}", msg["verb"].as_str().unwrap(),
-                                                 msg["request_id"].as_str().unwrap(),
-                                                 msg["service"].as_str().unwrap(),
-                                                 msg["name"].as_str().unwrap());
-                    } else {
-                        print!("<- {} {} {}", msg["verb"].as_str().unwrap(),
-                                              msg["request_id"].as_str().unwrap(),
-                                              msg["name"].as_str().unwrap());
-                    }
-
-                    if msg["content_length"].is_null() {
-                        println!("");
-                    } else {
-                        println!(" {}", msg["body"].to_string());
-                    }
-                }
-
-                response
-            }
-            Either::Right((None, _)) => Err(Error::ConnectionClosed),
-            Either::Left((_, _)) => Err(Error::ConnectionClosed)
+            None => Err(Error::ConnectionClosed)
         }
-    }
-
-    pub fn clean_up(&self) {
-
     }
 
     fn parse(data: &str) -> Option<serde_json::Value> {

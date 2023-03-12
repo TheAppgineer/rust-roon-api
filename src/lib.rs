@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use futures_util::{FutureExt, future::{select_all, select, Either}};
-use moo::{Moo, MooReceiver, MooSender, RespProps};
+use futures_util::{FutureExt, future::{join_all, select_all, select, Either}};
+use moo::{Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -14,8 +14,9 @@ mod sood;
 #[cfg(feature = "status")]
 pub mod status;
 
+type RespProps = (&'static[&'static str], Option<serde_json::Value>);
 type CoreEvent = dyn Fn(&Core) + Send;
-type Method = Box<dyn Fn(&Core, Option<&serde_json::Value>) -> RespProps + Send>;
+type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps + Send>;
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
@@ -38,6 +39,7 @@ impl RoonApi {
         let mut reg_info = options;
 
         reg_info["provided_services"] = json!([]);
+        reg_info["required_services"] = json!([]);
 
         Self {
             reg_info,
@@ -119,9 +121,7 @@ impl RoonApi {
                                 sood_conns.push(unique_id.to_owned());
     
                                 if let Ok((mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port).await {
-                                    let props: RespProps = (&["REQUEST", "com.roonlabs.registry:1/info"], None);
-
-                                    moo_sender.send_msg(moo_sender.req_id, &props).await.unwrap();
+                                    moo_sender.send_req("com.roonlabs.registry:1/info", None).await.unwrap();
                                     new_moo = Some(moo_receiver);
                                     moo_tx.send(moo_sender).await.unwrap();
                                 }
@@ -141,11 +141,8 @@ impl RoonApi {
                                     sood_conns.push(unique_id.to_owned());
         
                                     if let Ok((mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port).await {
-                                        let props: RespProps = (&["REQUEST", "com.roonlabs.registry:1/info"], None);
-
-                                        moo_sender.send_msg(moo_sender.req_id, &props).await.unwrap();
-                                            new_moo = Some(moo_receiver);
-        
+                                        moo_sender.send_req("com.roonlabs.registry:1/info", None).await.unwrap();
+                                        new_moo = Some(moo_receiver);        
                                         moo_tx.send(moo_sender).await.unwrap();
                                     }
                                 }
@@ -165,10 +162,9 @@ impl RoonApi {
                 if let Some(moo) = new_moo {
                     moo_receivers.push(moo);
                 } else if let Some(moo_id) = lost_moo {
-                    let moo = moo_receivers.remove(moo_id);
+                    moo_receivers.remove(moo_id);
 
                     sood_conns.remove(moo_id);
-                    moo.clean_up();
                 }
             }
         };
@@ -197,24 +193,16 @@ impl RoonApi {
 
                         for moo in &mut moo_senders.iter_mut() {
                             if let Some(request_id) = response_ids.get(&moo.moo_id) {
-                                let props = props_option.as_ref().unwrap();
+                                let (hdr, body) = props_option.as_ref().unwrap();
 
-                                msg_senders.push(moo.send_msg(*request_id, &props).boxed());
+                                msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
                             }
                         }
 
-                        match select(msg_rx.recv().boxed(), select_all(msg_senders)).await {
-                            Either::Left((Some((moo_id, Some(msg))), _)) => {
-                                mooid_msg = Some((moo_id, msg));
-                            }
-                            Either::Left((Some((moo_id, None)), _)) => {
-                                lost_moo = Some(moo_id);
-                            }
-                            Either::Right(((Ok(moo_id), _, _), _)) => {
+                        for moo_id in join_all(msg_senders).await {
+                            if let Ok(moo_id) = moo_id {
                                 response_ids.remove(&moo_id);
                             }
-                            Either::Left((_, _)) => (),
-                            Either::Right((_, _)) => ()
                         }
                     } else {
                         match select(msg_rx.recv().boxed(), moo_rx.recv().boxed()).await {
@@ -227,9 +215,7 @@ impl RoonApi {
                             Either::Right((moo, _)) => {
                                 new_moo = moo;
                             }
-                            Either::Left((_, _)) => {
-    
-                            }
+                            Either::Left((_, _)) => ()
                         }
                     }
                 }
@@ -243,10 +229,9 @@ impl RoonApi {
                     moo_senders.remove(moo_id);
                     on_core_lost(&core);
                 } else if let Some((index, msg)) = mooid_msg {
-                    let moo = moo_senders.get_mut(index).unwrap();
-
                     if msg["request_id"] == "0" && msg["body"]["core_id"].is_string() {
                         let settings = Self::load_config("roonstate");
+                        let moo = moo_senders.get_mut(index).unwrap();
 
                         if let Some(tokens) = settings.get("tokens") {
                             let core_id = msg["body"]["core_id"].as_str().unwrap();
@@ -305,11 +290,10 @@ impl RoonApi {
 
                                 if let Some(svc) = svc {
                                     {
-                                        let sub_name = "subscribe_pairing";
                                         let sub_types = svc.sub_types.lock().unwrap();
         
                                         for (msg_key, msg) in sub_types.iter() {
-                                            if msg_key.contains(sub_name) {
+                                            if msg_key.contains("subscribe_pairing") {
                                                 let request_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
                                                 let moo_id = msg_key[msg_key.len()..].parse::<usize>().unwrap();
                                                 response_ids.insert(moo_id, request_id);
@@ -343,7 +327,7 @@ impl RoonApi {
                         let svc = svcs.remove(&svc_name);
 
                         if let Some(svc) = svc {
-                            let (hdr, body) = (svc.req_handler)(cores.get(index).unwrap(), Some(&msg));
+                            let (hdr, body) = (svc.req_handler)(cores.get(index), Some(&msg));
 
                             if let Some(_) = hdr.get(2) {
                                 let sub_name = hdr[0];
@@ -390,8 +374,15 @@ impl RoonApi {
         #[cfg(feature = "pairing")]
         self.add_pairing_service(svcs);
 
-        for (name, _) in svcs {
-            self.reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
+        for (name, svc) in svcs {
+            match svc.svc_type {
+                SvcType::Provides => {
+                    self.reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
+                }
+                SvcType::Requires => {
+                    self.reg_info["required_services"].as_array_mut().unwrap().push(json!(name));
+                }
+            }
         }
     }
 
@@ -403,12 +394,12 @@ impl RoonApi {
         for sub in spec.subs {
             let sub_types_clone = sub_types.clone();
             let sub_name = sub.subscribe_name.clone();
-            let sub_method = move |core: &Core, msg: Option<&serde_json::Value>| -> RespProps {
+            let sub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> RespProps {
                 let mut sub_types = sub_types_clone.lock().unwrap();
 
                 if let Some(msg) = msg {
                     let sub_key = msg["body"]["subscription_key"].as_str().unwrap();
-                    let msg_key = format!("{}:{}:{}", sub_name, core.moo_id, sub_key);
+                    let msg_key = format!("{}:{}:{}", sub_name, core.unwrap().moo_id, sub_key);
 
                     sub_types.insert(msg_key, msg.to_owned());
                 }
@@ -418,9 +409,9 @@ impl RoonApi {
 
             let sub_types = sub_types.clone();
             let sub_name = sub.subscribe_name.clone();
-            let unsub_method = move |core: &Core, msg: Option<&serde_json::Value>| -> RespProps {
+            let unsub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> RespProps {
                 let mut sub_types = sub_types.lock().unwrap();
-                let sub_mooid = format!("{}{}", sub_name, core.moo_id);
+                let sub_mooid = format!("{}{}", sub_name, core.unwrap().moo_id);
 
                 sub_types.remove(&sub_mooid);
 
@@ -437,7 +428,7 @@ impl RoonApi {
         }
 
         let sub_types_clone = sub_types.clone();
-        let req_handler = move |core: &Core, req: Option<&serde_json::Value>| {
+        let req_handler = move |core: Option<&Core>, req: Option<&serde_json::Value>| {
             match req {
                 Some(msg) => {
                     let name = msg["name"].as_str().unwrap();
@@ -450,8 +441,10 @@ impl RoonApi {
                     let mut sub_types = sub_types_clone.lock().unwrap();
 
                     for sub_name in &sub_names {
-                        let sub_mooid = format!("{}{}", sub_name, core.moo_id);
-                        sub_types.remove(&sub_mooid);
+                        if let Some(core) = core {
+                            let sub_mooid = format!("{}{}", sub_name, core.moo_id);
+                            sub_types.remove(&sub_mooid);
+                        }
                     }
                 }
             }
@@ -460,14 +453,15 @@ impl RoonApi {
         };
 
         Svc {
+            svc_type: spec.svc_type,
             sub_types,
             req_handler: Box::new(req_handler)
         }
     }
 
     fn add_ping_service(&mut self, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new();
-        let ping = |_: &Core, _: Option<&serde_json::Value>| -> RespProps {
+        let mut spec = SvcSpec::new(SvcType::Provides);
+        let ping = |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             (&["COMPLETE", "Success"], None)
         };
 
@@ -477,9 +471,9 @@ impl RoonApi {
  
     #[cfg(feature = "pairing")]
     fn add_pairing_service(&mut self, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new();
+        let mut spec = SvcSpec::new(SvcType::Provides);
         let paired_core = self.paired_core.clone();
-        let get_pairing = move |_: &Core, _: Option<&serde_json::Value>| -> RespProps {
+        let get_pairing = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             match &*paired_core.lock().unwrap() {
                 Some(paired_core) => {
                     let body = json!({"paired_core_id": paired_core.core_id});
@@ -497,38 +491,42 @@ impl RoonApi {
         let paired_core = self.paired_core.clone();
         let on_core_found = self.on_core_found.clone();
         let on_core_lost = self.on_core_lost.clone();
-        let pair = move |core: &Core, _: Option<&serde_json::Value>| -> RespProps {
-            let mut paired_core = paired_core.lock().unwrap();
+        let pair = move |core: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+            if let Some(core) = core {
+                let mut paired_core = paired_core.lock().unwrap();
 
-            if let Some(paired_core) = paired_core.as_ref() {
-                if paired_core.core_id == core.core_id {
-                    return (&[], None)
-                } else {
-                    let on_core_lost = on_core_lost.lock().unwrap();
-
-                    on_core_lost(paired_core);
+                if let Some(paired_core) = paired_core.as_ref() {
+                    if paired_core.core_id == core.core_id {
+                        return (&[], None)
+                    } else {
+                        let on_core_lost = on_core_lost.lock().unwrap();
+    
+                        on_core_lost(paired_core);
+                    }
                 }
+    
+                let mut settings = Self::load_config("roonstate");
+    
+                settings["paired_core_id"] = core.core_id.clone().into();
+                Self::save_config("roonstate", settings).unwrap();
+    
+                *paired_core = Some(core.to_owned());
+    
+                let on_core_found = on_core_found.lock().unwrap();
+                on_core_found(&core);
+    
+                let body = json!({"paired_core_id": core.core_id});
+    
+                (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))
+            } else {
+                (&[], None)
             }
-
-            let mut settings = Self::load_config("roonstate");
-
-            settings["paired_core_id"] = core.core_id.clone().into();
-            Self::save_config("roonstate", settings).unwrap();
-
-            *paired_core = Some(core.to_owned());
-
-            let on_core_found = on_core_found.lock().unwrap();
-            on_core_found(&core);
-
-            let body = json!({"paired_core_id": core.core_id});
-
-            (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))
         };
 
         spec.add_method("pair", Box::new(pair));
 
         let paired_core = self.paired_core.clone();
-        let start = move |_: &Core, _: Option<&serde_json::Value>| -> RespProps {
+        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             match &*paired_core.lock().unwrap() {
                 Some(paired_core) => {
                     let body = json!({"paired_core_id": paired_core.core_id});
@@ -585,14 +583,21 @@ pub struct Sub {
     end: Option<Method>
 }
 
+pub enum SvcType {
+    Provides,
+    Requires
+}
+
 pub struct SvcSpec {
+    svc_type: SvcType,
     methods: HashMap<String, Method>,
     subs: Vec<Sub>
 }
 
 impl SvcSpec {
-    pub fn new() -> Self {
+    pub fn new(svc_type: SvcType) -> Self {
         Self {
+            svc_type,
             methods: HashMap::new(),
             subs: Vec::new()
         }
@@ -608,18 +613,19 @@ impl SvcSpec {
 }
 
 pub struct Svc {
+    svc_type: SvcType,
     sub_types: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     req_handler: Method
 }
 
 #[cfg(test)]
-#[cfg(feature = "pairing")]
+#[cfg(not(feature = "pairing"))]
 mod tests {
     use serde_json::json;
 
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         let info = json!({
             "extension_id": "com.theappgineer.rust-roon-api",
