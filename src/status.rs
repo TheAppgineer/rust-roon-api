@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
 
-use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec, SvcType};
+use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec};
 
 const SVCNAME: &str = "com.roonlabs.status:1";
 
@@ -18,7 +18,7 @@ impl Status {
     }
 
     pub fn add_status_service(&self, roon: &RoonApi, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new(SvcType::Provides);
+        let mut spec = SvcSpec::new();
 
         let props_clone = self.props.clone();
         let get_status = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
@@ -99,12 +99,12 @@ mod tests {
         };
 
         let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
-        let mut svcs: HashMap<String, Svc> = HashMap::new();
+        let mut provided: HashMap<String, Svc> = HashMap::new();
 
-        status.add_status_service(&roon, &mut svcs);
-        roon.init_services(&mut svcs);
+        status.add_status_service(&roon, &mut provided);
+        roon.init_services(&mut provided);
 
-        for handle in roon.start_discovery(svcs).await.unwrap() {
+        for handle in roon.start_discovery(provided).await.unwrap() {
             handle.await.unwrap();
         }
     }

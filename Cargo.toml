@@ -18,4 +18,5 @@ regex = "1.5.5"
 [features]
 pairing = []
 status = []
+transport = ["pairing"]
 default = []

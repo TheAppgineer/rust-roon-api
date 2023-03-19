@@ -5,46 +5,63 @@ use futures_util::SinkExt;
 use regex::Regex;
 use serde_json::json;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio_tungstenite::tungstenite::{Message, error::Error};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 static MOO_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-pub struct Moo;
+#[derive(Clone, Debug)]
+pub struct Moo {
+    pub id: usize,
+    msg_tx: Sender<(String, Option<serde_json::Value>)>
+}
 
 #[derive(Debug)]
 pub struct MooSender {
-    pub moo_id: usize,
+    pub id: usize,
     pub req_id: usize,
+    pub msg_rx: Receiver<(String, Option<serde_json::Value>)>,
     write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>
 }
 
 pub struct MooReceiver {
-    pub moo_id: usize,
+    pub id: usize,
     read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>
 }
 
 impl Moo {
-    pub async fn new(ip: &IpAddr, port: &str) -> Result<(MooSender, MooReceiver), Error> {
-        let moo_id = MOO_COUNT.fetch_add(1, Ordering::Relaxed);
+    pub async fn new(ip: &IpAddr, port: &str) -> Result<(Moo, MooSender, MooReceiver), Error> {
+        let id = MOO_COUNT.fetch_add(1, Ordering::Relaxed);
         let url = Url::parse(&format!("ws://{}:{}/api", ip, port)).unwrap();
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
+        let (msg_tx, msg_rx) = mpsc::channel::<(String, Option<serde_json::Value>)>(4);
+
+        let moo = Moo {
+            id,
+            msg_tx
+        };
 
         let sender = MooSender {
-            moo_id,
-            write,
-            req_id: 0
+            id,
+            req_id: 0,
+            msg_rx,
+            write
         };
 
         let receiver = MooReceiver {
-            moo_id,
+            id,
             read
         };
 
-        Ok((sender, receiver))
+        Ok((moo, sender, receiver))
+    }
+
+    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) {
+        self.msg_tx.send((name, body)).await.unwrap();
     }
 }
 
@@ -58,22 +75,22 @@ impl MooSender {
             let action = hdr[0];
             let state = hdr[1];
             let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
-    
+
             if let Some(body) = body {
                 let body = body.to_string();
-    
+
                 println!("-> {} {} {} {}", action, request_id, state, body);
-    
+
                 let body_len = body.as_bytes().len();
-    
+
                 header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
                 header.push_str(&body);
             } else {
                 println!("-> {} {} {}", action, request_id, state);
-    
+
                 header.push('\n');
             }
-    
+
             self.write.send(Message::Binary(Vec::from(header))).await?;
 
             if action == "REQUEST" {
@@ -81,7 +98,7 @@ impl MooSender {
             }
         }
 
-        Ok(self.moo_id)
+        Ok(self.id)
     }
 }
 
