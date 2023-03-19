@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{Core, RequiredSvc};
 
-const SVCNAME: &str = "com.roonlabs.transport:2";
+pub const SVCNAME: &str = "com.roonlabs.transport:2";
 
 pub struct Transport {
     name: &'static str,
@@ -62,11 +62,9 @@ mod tests {
             println!("Core lost: {}", core.display_name);
         };
         let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
-        let mut provided: HashMap<String, Svc> = HashMap::new();
+        let provided: HashMap<String, Svc> = HashMap::new();
 
-        roon.init_services(&mut provided);
-
-        for handle in roon.start_discovery(provided, required).await.unwrap() {
+        for handle in roon.start_discovery(provided, Some(required)).await.unwrap() {
             handle.await.unwrap();
         }
     }

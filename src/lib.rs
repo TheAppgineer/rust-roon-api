@@ -12,6 +12,9 @@ use tokio::time::{sleep, Duration};
 pub mod moo;
 mod sood;
 
+#[cfg(feature = "pairing")]
+pub mod pairing;
+
 #[cfg(feature = "status")]
 pub mod status;
 
@@ -57,7 +60,7 @@ impl RoonApi {
     pub async fn start_discovery(
         &mut self,
         mut provided: HashMap<String, Svc>,
-        #[cfg(feature = "pairing")] mut required: Vec<Box<dyn RequiredSvc + 'static>>,
+        #[cfg(feature = "pairing")] mut required: Option<Vec<Box<dyn RequiredSvc + 'static>>>,
     ) -> std::io::Result<Vec<JoinHandle<()>>> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
@@ -68,13 +71,25 @@ impl RoonApi {
         let (moo_tx, mut moo_rx) = mpsc::channel::<(Moo, MooSender)>(4);
         let (msg_tx, mut msg_rx) = mpsc::channel::<(usize, Option<serde_json::Value>)>(4);
 
-        for (name, _) in &provided {
-            self.reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
-        }
+        let ping = Ping::new(self);
+
+        provided.insert(ping.name.to_owned(), ping);
 
         #[cfg(feature = "pairing")]
-        for svc in &required {
-            self.reg_info["required_services"].as_array_mut().unwrap().push(json!(svc.get_name()));
+        {
+            let pairing = pairing::Pairing::new(self);
+
+            provided.insert(pairing.name.to_owned(), pairing);
+
+            if let Some(required) = &required {
+                for svc in required {
+                    self.reg_info["required_services"].as_array_mut().unwrap().push(json!(svc.get_name()));
+                }
+            }
+        }
+
+        for (name, _) in &provided {
+            self.reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
         }
 
         #[cfg(feature = "pairing")]
@@ -324,7 +339,7 @@ impl RoonApi {
                             }
 
                             if let Some(paired_core_id) = paired_core_id {
-                                let svc_name = "com.roonlabs.pairing:1";
+                                let svc_name = pairing::SVCNAME;
                                 let svc = provided.remove(svc_name);
 
                                 if let Some(svc) = svc {
@@ -346,8 +361,10 @@ impl RoonApi {
                                     props_option = Some((&["CONTINUE", "Changed"], Some(body)));
                                 }
 
-                                for svc in &mut required {
-                                    svc.set_core(paired_core.clone());
+                                if let Some(required) = &mut required {
+                                    for svc in required {
+                                        svc.set_core(paired_core.clone());
+                                    }
                                 }
 
                                 let on_core_found = on_core_found.lock().unwrap();
@@ -409,13 +426,6 @@ impl RoonApi {
         handles.push(tokio::spawn(moo_receive));
 
         Ok(handles)
-    }
-
-    pub fn init_services(&mut self, provided: &mut HashMap<String, Svc>) {
-        self.add_ping_service(provided);
-
-        #[cfg(feature = "pairing")]
-        self.add_pairing_service(provided);
     }
 
     pub fn register_service(&self, spec: SvcSpec) -> Svc {
@@ -485,100 +495,10 @@ impl RoonApi {
         };
 
         Svc {
+            name: spec.name,
             sub_types,
             req_handler: Box::new(req_handler)
         }
-    }
-
-    fn add_ping_service(&mut self, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new();
-        let ping = |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
-            (&["COMPLETE", "Success"], None)
-        };
-
-        spec.add_method("ping", Box::new(ping));
-        svcs.insert("com.roonlabs.ping:1".to_owned(), self.register_service(spec));
-    }
- 
-    #[cfg(feature = "pairing")]
-    fn add_pairing_service(&mut self, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new();
-        let paired_core = self.paired_core.clone();
-        let get_pairing = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
-            match &*paired_core.lock().unwrap() {
-                Some(paired_core) => {
-                    let body = json!({"paired_core_id": paired_core.core_id});
-
-                    (&["COMPLETE", "Success"], Some(body))
-                }
-                None => {
-                    (&["COMPLETE", "Success"], None)
-                }
-            }
-        };
-
-        spec.add_method("get_pairing", Box::new(get_pairing));
-
-        let paired_core = self.paired_core.clone();
-        let on_core_found = self.on_core_found.clone();
-        let on_core_lost = self.on_core_lost.clone();
-        let pair = move |core: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
-            if let Some(core) = core {
-                let mut paired_core = paired_core.lock().unwrap();
-
-                if let Some(paired_core) = paired_core.as_ref() {
-                    if paired_core.core_id == core.core_id {
-                        return (&[], None)
-                    } else {
-                        let on_core_lost = on_core_lost.lock().unwrap();
-    
-                        on_core_lost(paired_core);
-                    }
-                }
-    
-                let mut settings = Self::load_config("roonstate");
-    
-                settings["paired_core_id"] = core.core_id.clone().into();
-                Self::save_config("roonstate", settings).unwrap();
-    
-                *paired_core = Some(core.to_owned());
-    
-                let on_core_found = on_core_found.lock().unwrap();
-                on_core_found(&core);
-    
-                let body = json!({"paired_core_id": core.core_id});
-    
-                (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))
-            } else {
-                (&[], None)
-            }
-        };
-
-        spec.add_method("pair", Box::new(pair));
-
-        let paired_core = self.paired_core.clone();
-        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
-            match &*paired_core.lock().unwrap() {
-                Some(paired_core) => {
-                    let body = json!({"paired_core_id": paired_core.core_id});
-
-                    (&["CONTINUE", "Subscribed"], Some(body))
-                }
-                None => {
-                    let body = json!({"paired_core_id": "undefined"});
-
-                    (&["CONTINUE", "Subscribed"], Some(body))
-                }
-            }
-        };
-
-        spec.add_sub(Sub {
-            subscribe_name: "subscribe_pairing".to_owned(),
-            unsubscribe_name: "unsubscribe_pairing".to_owned(),
-            start: Box::new(start),
-            end: None
-        });
-        svcs.insert("com.roonlabs.pairing:1".to_owned(), self.register_service(spec));
     }
 
     fn save_config(key: &str, value: serde_json::Value) -> std::io::Result<()> {
@@ -607,6 +527,22 @@ impl RoonApi {
     }
 }
 
+pub struct Ping;
+
+impl Ping {
+    pub fn new(roon: &RoonApi) -> Svc {
+        const SVCNAME: &str = "com.roonlabs.ping:1";
+        let mut spec = SvcSpec::new(SVCNAME);
+        let ping = |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+            (&["COMPLETE", "Success"], None)
+        };
+    
+        spec.add_method("ping", Box::new(ping));
+
+        roon.register_service(spec)
+    }
+}
+
 pub struct Sub {
     subscribe_name: String,
     unsubscribe_name: String,
@@ -614,19 +550,16 @@ pub struct Sub {
     end: Option<Method>
 }
 
-pub enum SvcType {
-    Provides,
-    Requires
-}
-
 pub struct SvcSpec {
+    name: &'static str,
     methods: HashMap<String, Method>,
     subs: Vec<Sub>
 }
 
 impl SvcSpec {
-    pub fn new() -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             methods: HashMap::new(),
             subs: Vec::new()
         }
@@ -642,6 +575,7 @@ impl SvcSpec {
 }
 
 pub struct Svc {
+    pub name: &'static str,
     sub_types: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     req_handler: Method
 }
@@ -674,9 +608,7 @@ mod tests {
             println!("Core lost: {}", core.display_name);
         };
         let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
-        let mut provided: HashMap<String, Svc> = HashMap::new();
-
-        roon.init_services(&mut provided);
+        let provided: HashMap<String, Svc> = HashMap::new();
 
         for handle in roon.start_discovery(provided).await.unwrap() {
             handle.await.unwrap();

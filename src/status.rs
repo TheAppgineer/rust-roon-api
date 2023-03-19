@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec};
 
-const SVCNAME: &str = "com.roonlabs.status:1";
+pub const SVCNAME: &str = "com.roonlabs.status:1";
 
 pub struct Status {
     props: Arc<Mutex<(String, bool)>>
@@ -17,8 +16,8 @@ impl Status {
         }
     }
 
-    pub fn add_status_service(&self, roon: &RoonApi, svcs: &mut HashMap<String, Svc>) {
-        let mut spec = SvcSpec::new();
+    pub fn get_service(&self, roon: &RoonApi) -> Svc {
+        let mut spec = SvcSpec::new(SVCNAME);
 
         let props_clone = self.props.clone();
         let get_status = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
@@ -51,7 +50,7 @@ impl Status {
             end: None
         });
 
-        svcs.insert(SVCNAME.to_owned(), roon.register_service(spec));
+        roon.register_service(spec)
     }
 
     pub fn set_status(&self, message: String, is_error: bool) -> RespProps {
@@ -69,9 +68,10 @@ impl Status {
 #[cfg(test)]
 #[cfg(feature = "status")]
 mod tests {
+    use std::collections::HashMap;
     use serde_json::json;
 
-    use crate::status::Status;
+    use crate::status::{self, Status};
 
     use super::*;
 
@@ -100,9 +100,9 @@ mod tests {
 
         let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
         let mut provided: HashMap<String, Svc> = HashMap::new();
+        let svc = status.get_service(&roon);
 
-        status.add_status_service(&roon, &mut provided);
-        roon.init_services(&mut provided);
+        provided.insert(status::SVCNAME.to_owned(), svc);
 
         for handle in roon.start_discovery(provided).await.unwrap() {
             handle.await.unwrap();
