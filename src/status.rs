@@ -87,24 +87,30 @@ mod tests {
         let status = Arc::new(Status::new());
 
         let status_clone = status.clone();
-        let on_core_found = move |core: &Core| {
-            let message = format!("Core found: {}\nversion {}", core.display_name, core.display_version);
-            status_clone.set_status(message, false);
-        };
-
-        let status_clone = status.clone();
         let on_core_lost = move |core: &Core| {
             let message = format!("Core lost: {}", core.display_name);
             status_clone.set_status(message, false);
         };
 
-        let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
+        let mut roon = RoonApi::new(info, Box::new(on_core_lost));
         let mut provided: HashMap<String, Svc> = HashMap::new();
         let svc = status.get_service(&roon);
 
         provided.insert(status::SVCNAME.to_owned(), svc);
 
-        for handle in roon.start_discovery(provided).await.unwrap() {
+        let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
+        let status_clone = status.clone();
+
+        handles.push(tokio::spawn(async move {
+            if let Some((core, _)) = core_rx.recv().await {
+                if let Some(core) = core {
+                    let message = format!("Core found: {}\nversion {}", core.display_name, core.display_version);
+                    status_clone.set_status(message, false);
+                }
+            }
+        }));
+
+        for handle in handles {
             handle.await.unwrap();
         }
     }

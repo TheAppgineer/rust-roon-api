@@ -5,7 +5,7 @@ use moo::{Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
 use serde_json::json;
 use tokio::select;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
@@ -27,7 +27,7 @@ type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    on_core_found: Arc<Mutex<CoreEvent>>,
+    core_tx: Option<Sender<(Option<Core>, Option<(String, serde_json::Value)>)>>,
     on_core_lost: Arc<Mutex<CoreEvent>>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<Mutex<Option<Core>>>
@@ -38,11 +38,31 @@ pub struct Core {
     pub display_name: String,
     pub display_version: String,
     core_id: String,
-    moo: Moo
+    moo: Moo,
+    #[cfg(feature = "transport")]
+    required: Option<Vec<Required>>
+}
+
+impl Core {
+    #[cfg(feature = "transport")]
+    pub fn get_transport(&mut self) -> Option<&transport::Transport> {
+        if let Some(required) = self.required.as_mut() {
+            for svc in required {
+                match svc {
+                    Required::Transport(transport) => {
+                        transport.set_moo(self.moo.clone());
+                        return Some(transport)
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 
 impl RoonApi {
-    pub fn new(options: serde_json::Value, on_core_found: Box<CoreEvent>, on_core_lost: Box<CoreEvent>) -> Self {
+    pub fn new(options: serde_json::Value, on_core_lost: Box<CoreEvent>) -> Self {
         let mut reg_info = options;
 
         reg_info["provided_services"] = json!([]);
@@ -50,7 +70,7 @@ impl RoonApi {
 
         Self {
             reg_info,
-            on_core_found: Arc::new(Mutex::new(on_core_found)),
+            core_tx: None,
             on_core_lost: Arc::new(Mutex::new(on_core_lost)),
             #[cfg(feature = "pairing")]
             paired_core: Arc::new(Mutex::new(None))
@@ -60,8 +80,8 @@ impl RoonApi {
     pub async fn start_discovery(
         &mut self,
         mut provided: HashMap<String, Svc>,
-        #[cfg(feature = "pairing")] mut required: Option<Vec<Box<dyn RequiredSvc + 'static>>>,
-    ) -> std::io::Result<Vec<JoinHandle<()>>> {
+        #[cfg(feature = "pairing")] required: Option<Vec<Required>>,
+    ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(Option<Core>, Option<(String, serde_json::Value)>)>)> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
         let mut sood = Sood::new();
@@ -70,6 +90,9 @@ impl RoonApi {
         let (handle, mut sood_rx) = sood.start().await?;
         let (moo_tx, mut moo_rx) = mpsc::channel::<(Moo, MooSender)>(4);
         let (msg_tx, mut msg_rx) = mpsc::channel::<(usize, Option<serde_json::Value>)>(4);
+        let (core_tx, core_rx) = mpsc::channel::<(Option<Core>, Option<(String, serde_json::Value)>)>(4);
+
+        self.core_tx = Some(core_tx.clone());
 
         let ping = Ping::new(self);
 
@@ -83,7 +106,13 @@ impl RoonApi {
 
             if let Some(required) = &required {
                 for svc in required {
-                    self.reg_info["required_services"].as_array_mut().unwrap().push(json!(svc.get_name()));
+                    match svc {
+                        #[cfg(feature = "transport")]
+                        Required::Transport(_) => {
+                            self.reg_info["required_services"].as_array_mut().unwrap().push(json!(transport::SVCNAME));
+                        }
+                        #[cfg(not(any(feature = "transport")))] _ => ()
+                    }
                 }
             }
         }
@@ -204,7 +233,6 @@ impl RoonApi {
         let paired_core = self.paired_core.clone();
 
         let mut body = self.reg_info.clone();
-        let on_core_found = self.on_core_found.clone();
         let on_core_lost = self.on_core_lost.clone();
         let moo_receive = async move {
             let mut moo_senders: Vec<MooSender> = Vec::new();
@@ -294,8 +322,10 @@ impl RoonApi {
                             }
                         }
 
+                        let req_id = moo.req_id.lock().unwrap().to_owned();
+
                         props_option = Some((&["REQUEST", "com.roonlabs.registry:1/register"], Some(body.to_owned())));
-                        response_ids.insert(index, moo.req_id);
+                        response_ids.insert(index, req_id);
                     } else if msg["name"] == "Registered" {
                         let body = &msg["body"];
                         let moo = user_moos.remove(&index).unwrap();
@@ -303,7 +333,9 @@ impl RoonApi {
                             display_name: body["display_name"].as_str().unwrap().to_string(),
                             display_version: body["display_version"].as_str().unwrap().to_string(),
                             core_id: body["core_id"].as_str().unwrap().to_string(),
-                            moo
+                            moo,
+                            #[cfg(any(feature = "transport"))]
+                            required: required.clone()
                         };
                         let mut settings = Self::load_config("roonstate");
 
@@ -330,9 +362,8 @@ impl RoonApi {
                                         }
                                     }
                                     Some(paired_core) => {
-                                        if paired_core.core_id == core.core_id {
-                                            let on_core_found = on_core_found.lock().unwrap();
-                                            on_core_found(&core);
+                                        if paired_core.core_id != core.core_id {
+                                            continue;
                                         }
                                     }
                                 }
@@ -360,23 +391,10 @@ impl RoonApi {
                                     let body = json!({"paired_core_id": paired_core_id});
                                     props_option = Some((&["CONTINUE", "Changed"], Some(body)));
                                 }
-
-                                if let Some(required) = &mut required {
-                                    for svc in required {
-                                        svc.set_core(paired_core.clone());
-                                    }
-                                }
-
-                                let on_core_found = on_core_found.lock().unwrap();
-                                on_core_found(&core);
                             }
                         }
 
-                        #[cfg(not(feature = "pairing"))]
-                        {
-                            let on_core_found = on_core_found.lock().unwrap();
-                            on_core_found(&core);
-                        }
+                        core_tx.send((Some(core.clone()), None)).await.unwrap();
 
                         Self::save_config("roonstate", settings).unwrap();
 
@@ -415,6 +433,10 @@ impl RoonApi {
                             props_option = Some((&["COMPLETE", "InvalidRequest"], Some(body)));
                             response_ids.insert(index, request_id);
                         }
+                    } else {
+                        let response = msg["name"].as_str().unwrap();
+                        let msg = msg["body"].to_owned();
+                        core_tx.send((None, Some((response.to_owned(), msg)))).await.unwrap();
                     }
                 }
             }
@@ -425,7 +447,7 @@ impl RoonApi {
         handles.push(tokio::spawn(sood_receive));
         handles.push(tokio::spawn(moo_receive));
 
-        Ok(handles)
+        Ok((handles, core_rx))
     }
 
     pub fn register_service(&self, spec: SvcSpec) -> Svc {
@@ -580,9 +602,11 @@ pub struct Svc {
     req_handler: Method
 }
 
-pub trait RequiredSvc: Send {
-    fn get_name(&self) -> &str;
-    fn set_core(&mut self, core: Arc<Mutex<Option<Core>>>);
+#[cfg(any(feature = "pairing", feature = "transport"))]
+#[derive(Clone, Debug)]
+pub enum Required {
+    #[cfg(feature = "transport")]
+    Transport(transport::Transport)
 }
 
 #[cfg(test)]
@@ -601,16 +625,22 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let on_core_found = move |core: &Core| {
-            println!("Core found: {}, version {}", core.display_name, core.display_version);
-        };
         let on_core_lost = move |core: &Core| {
             println!("Core lost: {}", core.display_name);
         };
-        let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
+        let mut roon = RoonApi::new(info, Box::new(on_core_lost));
         let provided: HashMap<String, Svc> = HashMap::new();
+        let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
 
-        for handle in roon.start_discovery(provided).await.unwrap() {
+        handles.push(tokio::spawn(async move {
+            if let Some((core, _)) = core_rx.recv().await {
+                if let Some(core) = core {
+                    println!("Core found: {}, version {}", core.display_name, core.display_version);
+                }
+            }
+        }));
+
+        for handle in handles {
             handle.await.unwrap();
         }
     }

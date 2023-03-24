@@ -1,37 +1,51 @@
-use std::sync::{Arc, Mutex};
+use serde_json::json;
 
-use crate::{Core, RequiredSvc};
+use crate::Moo;
 
 pub const SVCNAME: &str = "com.roonlabs.transport:2";
 
+#[derive(Clone, Debug)]
 pub struct Transport {
-    name: &'static str,
-    core: Arc<Mutex<Option<Core>>>
-}
-
-impl RequiredSvc for Transport {
-    fn get_name(&self) -> &str {
-        self.name
-    }
-
-    fn set_core(&mut self, core: Arc<Mutex<Option<Core>>>) {
-        self.core = core;
-    }
+    moo: Option<Moo>
 }
 
 impl Transport {
     pub fn new() -> Self {
         Self {
-            name: SVCNAME,
-            core: Arc::new(Mutex::new(None))
+            moo: None
         }
     }
 
-    pub async fn get_zones(&self) {
-        let core = self.core.lock().unwrap();
+    pub fn set_moo(&mut self, moo: Moo) {
+        self.moo = Some(moo);
+    }
 
-        if let Some(core) = &*core {
-            core.moo.send_req(SVCNAME.to_owned() + "/get_zones", None).await;
+    pub async fn get_zones(&self) -> Option<usize> {
+        if let Some(moo) = &self.moo {
+            moo.send_req(SVCNAME.to_owned() + "/get_zones", None).await.ok()
+        } else {
+            None
+        }
+    }
+
+    pub async fn subscribe_zones(&self) -> Option<usize> {
+        if let Some(moo) = &self.moo {
+            moo.send_sub_req(SVCNAME, "zones", None).await.ok()
+        } else {
+            None
+        }
+    }
+
+    pub async fn control(&self, zone_id: &str, control: &str) -> Option<usize> {
+        if let Some(moo) = &self.moo {
+            let body = json!({
+                "zone_or_output_id": zone_id,
+                "control": control
+            });
+
+            moo.send_req(SVCNAME.to_owned() + "/control", Some(body)).await.ok()
+        } else {
+            None
         }
     }
 }
@@ -43,7 +57,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{RoonApi, Core, Svc};
+    use crate::{RoonApi, Core, Svc, Required};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
@@ -54,17 +68,44 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let required: Vec<Box<dyn RequiredSvc>> = vec!(Box::new(Transport::new()));
-        let on_core_found = move |core: &Core| {
-            println!("Core found: {}, version {}", core.display_name, core.display_version);
-        };
+        let required = vec![Required::Transport(Transport::new())];
         let on_core_lost = move |core: &Core| {
             println!("Core lost: {}", core.display_name);
         };
-        let mut roon = RoonApi::new(info, Box::new(on_core_found), Box::new(on_core_lost));
+        let mut roon = RoonApi::new(info, Box::new(on_core_lost));
         let provided: HashMap<String, Svc> = HashMap::new();
+        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(required)).await.unwrap();
 
-        for handle in roon.start_discovery(provided, Some(required)).await.unwrap() {
+        handles.push(tokio::spawn(async move {
+            let mut transport = None;
+
+            loop {
+                if let Some((mut core, msg)) = core_rx.recv().await {
+                    if let Some(core) = core.as_mut() {
+                        println!("Core found: {}, version {}", core.display_name, core.display_version);
+    
+                        transport = if let Some(transport) = core.get_transport() {
+                            transport.subscribe_zones().await;
+                            Some(transport.clone())
+                        } else {
+                            None
+                        }
+                    }
+    
+                    if let Some((response, body)) = msg {
+                        if response == "Subscribed" {
+                            if let Some(transport) = &transport {
+                                let zone_id = body["zones"][1]["zone_id"].as_str().unwrap();
+
+                                transport.control(zone_id, "playpause").await;
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+
+        for handle in handles {
             handle.await.unwrap();
         }
     }

@@ -1,11 +1,11 @@
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use futures_util::stream::{StreamExt, SplitSink, SplitStream};
 use futures_util::SinkExt;
 use regex::Regex;
 use serde_json::json;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, Receiver, Sender, error::SendError};
 use tokio_tungstenite::tungstenite::{Message, error::Error};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
@@ -15,13 +15,15 @@ static MOO_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Debug)]
 pub struct Moo {
     pub id: usize,
-    msg_tx: Sender<(String, Option<serde_json::Value>)>
+    pub req_id: Arc<Mutex<usize>>,
+    msg_tx: Sender<(String, Option<serde_json::Value>)>,
+    sub_key: Arc<Mutex<usize>>
 }
 
 #[derive(Debug)]
 pub struct MooSender {
     pub id: usize,
-    pub req_id: usize,
+    pub req_id: Arc<Mutex<usize>>,
     pub msg_rx: Receiver<(String, Option<serde_json::Value>)>,
     write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>
 }
@@ -35,19 +37,23 @@ impl Moo {
     pub async fn new(ip: &IpAddr, port: &str) -> Result<(Moo, MooSender, MooReceiver), Error> {
         let id = MOO_COUNT.fetch_add(1, Ordering::Relaxed);
         let url = Url::parse(&format!("ws://{}:{}/api", ip, port)).unwrap();
+        let req_id = Arc::new(Mutex::new(0));
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
         let (msg_tx, msg_rx) = mpsc::channel::<(String, Option<serde_json::Value>)>(4);
 
+        let req_id_clone = req_id.clone();
         let moo = Moo {
             id,
-            msg_tx
+            req_id: req_id_clone,
+            msg_tx,
+            sub_key: Arc::new(Mutex::new(0))
         };
 
         let sender = MooSender {
             id,
-            req_id: 0,
+            req_id,
             msg_rx,
             write
         };
@@ -60,14 +66,38 @@ impl Moo {
         Ok((moo, sender, receiver))
     }
 
-    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) {
-        self.msg_tx.send((name, body)).await.unwrap();
+    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) -> Result<usize, SendError<(String, Option<serde_json::Value>)>> {
+        let req_id = self.req_id.lock().unwrap().to_owned();
+
+        self.msg_tx.send((name, body)).await?;
+
+        Ok(req_id)
+    }
+
+    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<usize, SendError<(String, Option<serde_json::Value>)>> {
+        let body;
+
+        let mut sub_key = *self.sub_key.lock().unwrap();
+        sub_key += 1;
+
+        if let Some(mut args) = args {
+            args["subscription_key"] = sub_key.into();
+            body = Some(args);
+        } else {
+            body = Some(json!({"subscription_key": sub_key}));
+        }
+
+        let name = format!("{}/subscribe_{}", svc_name, req_name);
+
+        self.send_req(name, body).await
     }
 }
 
 impl MooSender {
     pub async fn send_req(&mut self, name: &str, body: Option<&serde_json::Value>) -> Result<usize, Error> {
-        self.send_msg(self.req_id, &["REQUEST", name], body).await
+        let req_id = self.req_id.lock().unwrap().to_owned();
+
+        self.send_msg(req_id, &["REQUEST", name], body).await
     }
 
     pub async fn send_msg(&mut self, request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> Result<usize, Error> {
@@ -94,7 +124,8 @@ impl MooSender {
             self.write.send(Message::Binary(Vec::from(header))).await?;
 
             if action == "REQUEST" {
-                self.req_id += 1;
+                let mut req_id = self.req_id.lock().unwrap();
+                *req_id += 1;
             }
         }
 
