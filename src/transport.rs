@@ -57,7 +57,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{RoonApi, Core, Svc, Required};
+    use crate::{RoonApi, Core, Svc, Services};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
@@ -68,13 +68,13 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let required = vec![Required::Transport(Transport::new())];
+        let services = vec![Services::Transport(Transport::new())];
         let on_core_lost = move |core: &Core| {
             println!("Core lost: {}", core.display_name);
         };
         let mut roon = RoonApi::new(info, Box::new(on_core_lost));
         let provided: HashMap<String, Svc> = HashMap::new();
-        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(required)).await.unwrap();
+        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             let mut transport = None;
@@ -83,7 +83,7 @@ mod tests {
                 if let Some((mut core, msg)) = core_rx.recv().await {
                     if let Some(core) = core.as_mut() {
                         println!("Core found: {}, version {}", core.display_name, core.display_version);
-    
+
                         transport = if let Some(transport) = core.get_transport() {
                             transport.subscribe_zones().await;
                             Some(transport.clone())
@@ -91,7 +91,7 @@ mod tests {
                             None
                         }
                     }
-    
+
                     if let Some((response, body)) = msg {
                         if response == "Subscribed" {
                             if let Some(transport) = &transport {

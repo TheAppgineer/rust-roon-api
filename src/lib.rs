@@ -39,20 +39,42 @@ pub struct Core {
     pub display_version: String,
     core_id: String,
     moo: Moo,
-    #[cfg(feature = "transport")]
-    required: Option<Vec<Required>>
+    #[cfg(any(feature = "status", feature = "transport"))]
+    services: Option<Vec<Services>>
 }
 
 impl Core {
     #[cfg(feature = "transport")]
     pub fn get_transport(&mut self) -> Option<&transport::Transport> {
-        if let Some(required) = self.required.as_mut() {
-            for svc in required {
+        if let Some(services) = self.services.as_mut() {
+            for svc in services {
                 match svc {
-                    Required::Transport(transport) => {
+                    Services::Transport(transport) => {
                         transport.set_moo(self.moo.clone());
+
                         return Some(transport)
                     }
+                    #[cfg(any(feature = "status"))]
+                    _ => ()
+                }
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "status")]
+    pub fn get_status(&mut self) -> Option<&status::Status> {
+        if let Some(services) = self.services.as_mut() {
+            for svc in services {
+                match svc {
+                    Services::Status(status) => {
+                        status.set_moo(self.moo.clone());
+
+                        return Some(status)
+                    }
+                    #[cfg(any(feature = "transport"))]
+                    _ => ()
                 }
             }
         }
@@ -80,7 +102,8 @@ impl RoonApi {
     pub async fn start_discovery(
         &mut self,
         mut provided: HashMap<String, Svc>,
-        #[cfg(feature = "pairing")] required: Option<Vec<Required>>,
+        #[cfg(all(feature = "status", not(any(feature = "transport"))))] services: Option<Vec<Services>>,
+        #[cfg(any(feature = "transport"))] mut services: Option<Vec<Services>>,
     ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(Option<Core>, Option<(String, serde_json::Value)>)>)> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
@@ -103,16 +126,18 @@ impl RoonApi {
             let pairing = pairing::Pairing::new(self);
 
             provided.insert(pairing.name.to_owned(), pairing);
+        }
 
-            if let Some(required) = &required {
-                for svc in required {
-                    match svc {
-                        #[cfg(feature = "transport")]
-                        Required::Transport(_) => {
-                            self.reg_info["required_services"].as_array_mut().unwrap().push(json!(transport::SVCNAME));
-                        }
-                        #[cfg(not(any(feature = "transport")))] _ => ()
+        #[cfg(any(feature = "transport"))]
+        if let Some(services) = &mut services {
+            for svc in services {
+                match svc {
+                    #[cfg(feature = "transport")]
+                    Services::Transport(_) => {
+                        self.reg_info["required_services"].as_array_mut().unwrap().push(json!(transport::SVCNAME));
                     }
+                    #[cfg(any(feature = "status"))]
+                    _ => ()
                 }
             }
         }
@@ -240,7 +265,7 @@ impl RoonApi {
             let mut user_moos: HashMap<usize, Moo> = HashMap::new();
             let mut props_option: Option<RespProps> = None;
             let mut response_ids: HashMap<usize, usize> = HashMap::new();
-            let mut req_name: String = String::new();
+            let mut msg_string: String = String::new();
 
             loop {
                 let mut new_moo = None;
@@ -249,53 +274,53 @@ impl RoonApi {
 
                 if moo_senders.len() == 0 {
                     new_moo = moo_rx.recv().await;
+                } else if response_ids.len() > 0 {
+                    let mut msg_senders = Vec::new();
+
+                    for moo in &mut moo_senders.iter_mut() {
+                        if let Some(request_id) = response_ids.get(&moo.id) {
+                            let (hdr, body) = props_option.as_ref().unwrap();
+
+                            if *request_id == 0 {
+                                msg_senders.push(moo.send_msg_string(&msg_string).boxed());
+                            } else {
+                                msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
+                            }
+                        }
+                    }
+
+                    for moo_id in join_all(msg_senders).await {
+                        if let Ok(moo_id) = moo_id {
+                            response_ids.remove(&moo_id);
+                        }
+                    }
                 } else {
-                    if response_ids.len() > 0 {
-                        let mut msg_senders = Vec::new();
+                    let mut req_receivers = Vec::new();
 
-                        for moo in &mut moo_senders.iter_mut() {
-                            if let Some(request_id) = response_ids.get(&moo.id) {
-                                let (hdr, body) = props_option.as_ref().unwrap();
+                    for moo in &mut moo_senders.iter_mut() {
+                        req_receivers.push(moo.msg_rx.recv().boxed());
+                    }
 
-                                if *request_id == 0 {
-                                    msg_senders.push(moo.send_req(&req_name, body.as_ref()).boxed());
-                                } else {
-                                    msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
+                    select! {
+                        Some((moo_id, msg)) = msg_rx.recv() => {
+                            match msg {
+                                Some(msg) => {
+                                    mooid_msg = Some((moo_id, msg));
+                                }
+                                None => {
+                                    lost_moo = Some(moo_id);
                                 }
                             }
                         }
-
-                        for moo_id in join_all(msg_senders).await {
-                            if let Ok(moo_id) = moo_id {
-                                response_ids.remove(&moo_id);
-                            }
+                        moo = moo_rx.recv() => {
+                            new_moo = moo;
                         }
-                    } else {
-                        let mut req_receivers = Vec::new();
+                        (Some(raw_msg), index, _) = select_all(req_receivers) => {
+                            msg_string = raw_msg;
+                            response_ids.insert(index, 0);
 
-                        for moo in &mut moo_senders.iter_mut() {
-                            req_receivers.push(moo.msg_rx.recv().boxed());
-                        }
-
-                        select! {
-                            Some((moo_id, msg)) = msg_rx.recv() => {
-                                match msg {
-                                    Some(msg) => {
-                                        mooid_msg = Some((moo_id, msg));
-                                    }
-                                    None => {
-                                        lost_moo = Some(moo_id);
-                                    }
-                                }
-                            }
-                            moo = moo_rx.recv() => {
-                                new_moo = moo;
-                            }
-                            (Some((name, body)), index, _) = select_all(req_receivers) => {
-                                req_name = name.to_owned();
-                                props_option = Some((&["REQUEST"], body));
-                                response_ids.insert(index, 0);
-                            }
+                            // Restart loop to sent
+                            continue;
                         }
                     }
                 }
@@ -334,8 +359,8 @@ impl RoonApi {
                             display_version: body["display_version"].as_str().unwrap().to_string(),
                             core_id: body["core_id"].as_str().unwrap().to_string(),
                             moo,
-                            #[cfg(any(feature = "transport"))]
-                            required: required.clone()
+                            #[cfg(any(feature = "status", feature = "transport"))]
+                            services: services.clone()
                         };
                         let mut settings = Self::load_config("roonstate");
 
@@ -377,11 +402,10 @@ impl RoonApi {
                                     {
                                         let sub_types = svc.sub_types.lock().unwrap();
         
-                                        for (msg_key, msg) in sub_types.iter() {
+                                        for (msg_key, req_id) in sub_types.iter() {
                                             if msg_key.contains("subscribe_pairing") {
-                                                let request_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
                                                 let moo_id = msg_key[msg_key.len()..].parse::<usize>().unwrap();
-                                                response_ids.insert(moo_id, request_id);
+                                                response_ids.insert(moo_id, *req_id);
                                             }
                                         }
                                     }
@@ -411,11 +435,12 @@ impl RoonApi {
                                 let sub_name = hdr[0];
                                 let sub_types = svc.sub_types.lock().unwrap();
 
-                                for (msg_key, msg) in sub_types.iter() {
-                                    if msg_key.contains(sub_name) {
-                                        let request_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
-                                        let moo_id = msg_key[msg_key.len()..].parse::<usize>().unwrap();
-                                        response_ids.insert(moo_id, request_id);
+                                for (msg_key, req_id) in sub_types.iter() {
+                                    let split: Vec<&str> = msg_key.split(':').collect();
+
+                                    if split[0] == sub_name {
+                                        let moo_id = split[1].parse::<usize>().unwrap();
+                                        response_ids.insert(moo_id, *req_id);
                                     }
                                 }
 
@@ -464,8 +489,9 @@ impl RoonApi {
                 if let Some(msg) = msg {
                     let sub_key = msg["body"]["subscription_key"].as_str().unwrap();
                     let msg_key = format!("{}:{}:{}", sub_name, core.unwrap().moo.id, sub_key);
+                    let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
 
-                    sub_types.insert(msg_key, msg.to_owned());
+                    sub_types.insert(msg_key, req_id);
                 }
 
                 (sub.start)(core, msg)
@@ -597,16 +623,17 @@ impl SvcSpec {
 }
 
 pub struct Svc {
-    pub name: &'static str,
-    sub_types: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    pub sub_types: Arc<Mutex<HashMap<String, usize>>>,
+    name: &'static str,
     req_handler: Method
 }
 
-#[cfg(any(feature = "pairing", feature = "transport"))]
 #[derive(Clone, Debug)]
-pub enum Required {
+pub enum Services {
     #[cfg(feature = "transport")]
-    Transport(transport::Transport)
+    Transport(transport::Transport),
+    #[cfg(feature = "status")]
+    Status(status::Status),
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ static MOO_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub struct Moo {
     pub id: usize,
     pub req_id: Arc<Mutex<usize>>,
-    msg_tx: Sender<(String, Option<serde_json::Value>)>,
+    msg_tx: Sender<String>,
     sub_key: Arc<Mutex<usize>>
 }
 
@@ -24,7 +24,7 @@ pub struct Moo {
 pub struct MooSender {
     pub id: usize,
     pub req_id: Arc<Mutex<usize>>,
-    pub msg_rx: Receiver<(String, Option<serde_json::Value>)>,
+    pub msg_rx: Receiver<String>,
     write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>
 }
 
@@ -41,7 +41,7 @@ impl Moo {
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
-        let (msg_tx, msg_rx) = mpsc::channel::<(String, Option<serde_json::Value>)>(4);
+        let (msg_tx, msg_rx) = mpsc::channel::<String>(4);
 
         let req_id_clone = req_id.clone();
         let moo = Moo {
@@ -66,15 +66,16 @@ impl Moo {
         Ok((moo, sender, receiver))
     }
 
-    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) -> Result<usize, SendError<(String, Option<serde_json::Value>)>> {
+    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) -> Result<usize, SendError<String>> {
         let req_id = self.req_id.lock().unwrap().to_owned();
+        let msg_string = Moo::create_msg_string(req_id, &["REQUEST", &name], body.as_ref());
 
-        self.msg_tx.send((name, body)).await?;
+        self.msg_tx.send(msg_string).await?;
 
         Ok(req_id)
     }
 
-    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<usize, SendError<(String, Option<serde_json::Value>)>> {
+    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<usize, SendError<String>> {
         let body;
 
         let mut sub_key = *self.sub_key.lock().unwrap();
@@ -91,6 +92,33 @@ impl Moo {
 
         self.send_req(name, body).await
     }
+
+    pub async fn send_msg_string(&self, msg_string: String) -> Result<(), SendError<String>> {
+        self.msg_tx.send(msg_string).await
+    }
+
+    pub fn create_msg_string(request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> String {
+        let action = hdr[0];
+        let state = hdr[1];
+        let mut msg_string = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
+
+        if let Some(body) = body {
+            let body = body.to_string();
+
+            println!("-> {} {} {} {}", action, request_id, state, body);
+
+            let body_len = body.as_bytes().len();
+
+            msg_string.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
+            msg_string.push_str(&body);
+        } else {
+            println!("-> {} {} {}", action, request_id, state);
+
+            msg_string.push('\n');
+        }
+
+        msg_string
+    }
 }
 
 impl MooSender {
@@ -103,31 +131,26 @@ impl MooSender {
     pub async fn send_msg(&mut self, request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> Result<usize, Error> {
         if hdr.len() > 1 {
             let action = hdr[0];
-            let state = hdr[1];
-            let mut header = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
+            let msg_string = Moo::create_msg_string(request_id, hdr, body);
 
-            if let Some(body) = body {
-                let body = body.to_string();
-
-                println!("-> {} {} {} {}", action, request_id, state, body);
-
-                let body_len = body.as_bytes().len();
-
-                header.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
-                header.push_str(&body);
-            } else {
-                println!("-> {} {} {}", action, request_id, state);
-
-                header.push('\n');
-            }
-
-            self.write.send(Message::Binary(Vec::from(header))).await?;
+            self.write.send(Message::Binary(Vec::from(msg_string))).await?;
 
             if action == "REQUEST" {
                 let mut req_id = self.req_id.lock().unwrap();
                 *req_id += 1;
             }
         }
+
+        Ok(self.id)
+    }
+
+    pub async fn send_msg_string(&mut self, msg_string: &str) -> Result<usize, Error> {
+        if msg_string.contains("REQUEST") {
+            let mut req_id = self.req_id.lock().unwrap();
+            *req_id += 1;
+        }
+
+        self.write.send(Message::Binary(Vec::from(msg_string))).await?;
 
         Ok(self.id)
     }

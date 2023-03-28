@@ -1,25 +1,24 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
 
-use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec};
+use crate::{RoonApi, Core, Moo, RespProps, Sub, Svc, SvcSpec};
 
 pub const SVCNAME: &str = "com.roonlabs.status:1";
 
+#[derive(Clone, Debug)]
 pub struct Status {
+    moo: Option<Moo>,
+    sub_types: Arc<Mutex<HashMap<String, usize>>>,
     props: Arc<Mutex<(String, bool)>>
 }
 
 impl Status {
-    pub fn new() -> Self {
-        Self {
-            props: Arc::new(Mutex::new((String::new(), false)))
-        }
-    }
-
-    pub fn get_service(&self, roon: &RoonApi) -> Svc {
+    pub fn new(roon: &RoonApi) -> (Svc, Self) {
         let mut spec = SvcSpec::new(SVCNAME);
+        let props = Arc::new(Mutex::new((String::new(), false)));
 
-        let props_clone = self.props.clone();
+        let props_clone = props.clone();
         let get_status = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             let (message, is_error) = &*props_clone.lock().unwrap();
             let body = json!({
@@ -32,7 +31,7 @@ impl Status {
 
         spec.add_method("get_status", Box::new(get_status));
 
-        let props_clone = self.props.clone();
+        let props_clone = props.clone();
         let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             let (message, is_error) = &*props_clone.lock().unwrap();
             let body = json!({
@@ -50,18 +49,49 @@ impl Status {
             end: None
         });
 
-        roon.register_service(spec)
+        let svc = roon.register_service(spec);
+        let status = Self {
+            moo: None,
+            sub_types: svc.sub_types.clone(),
+            props
+        };
+
+        (svc, status)
     }
 
-    pub fn set_status(&self, message: String, is_error: bool) -> RespProps {
+    pub fn set_moo(&mut self, moo: Moo) {
+        self.moo = Some(moo);
+    }
+
+    pub async fn set_status(&self, message: String, is_error: bool) {
+        if let Some(moo) = &self.moo {
+            let hdr = ["CONTINUE", "Changed"];
+            let body = json!({
+                "message": message,
+                "is_error": is_error
+            });
+
+            let sub_name = "subscribe_status";
+            let mut response_ids: HashMap<usize, usize> = HashMap::new();
+
+            for (msg_key, req_id) in self.sub_types.lock().unwrap().iter() {
+                let split: Vec<&str> = msg_key.split(':').collect();
+
+                if split[0] == sub_name {
+                    let moo_id = split[1].parse::<usize>().unwrap();
+                    response_ids.insert(moo_id, *req_id);
+                }
+            }
+
+            if let Some(request_id) = response_ids.get(&moo.id) {
+                let msg_string = Moo::create_msg_string(*request_id, &hdr, Some(&body));
+                moo.send_msg_string(msg_string).await.unwrap();
+            }
+        }
+
         let mut props = self.props.lock().unwrap();
-        let body = json!({
-            "message": message,
-            "is_error": is_error
-        });
 
         *props = (message, is_error);
-        (&["subscribe_status", "CONTINUE", "Changed"], Some(body))
     }
 }
 
@@ -72,6 +102,7 @@ mod tests {
     use serde_json::json;
 
     use crate::status::{self, Status};
+    use crate::Services;
 
     use super::*;
 
@@ -84,28 +115,33 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let status = Arc::new(Status::new());
-
-        let status_clone = status.clone();
         let on_core_lost = move |core: &Core| {
-            let message = format!("Core lost: {}", core.display_name);
-            status_clone.set_status(message, false);
+            println!("Core lost: {}", core.display_name);
         };
 
         let mut roon = RoonApi::new(info, Box::new(on_core_lost));
-        let mut provided: HashMap<String, Svc> = HashMap::new();
-        let svc = status.get_service(&roon);
+        let (svc, status) = Status::new(&roon);
+        let services = vec![Services::Status(status)];
 
+        let mut provided: HashMap<String, Svc> = HashMap::new();
         provided.insert(status::SVCNAME.to_owned(), svc);
 
-        let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
-        let status_clone = status.clone();
+        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
-            if let Some((core, _)) = core_rx.recv().await {
-                if let Some(core) = core {
-                    let message = format!("Core found: {}\nversion {}", core.display_name, core.display_version);
-                    status_clone.set_status(message, false);
+            loop {
+                if let Some((core, msg)) = core_rx.recv().await {
+                    if let Some(mut core) = core {
+                        let message = format!("Core found: {}\nversion {}", core.display_name, core.display_version);
+
+                        if let Some(status) = core.get_status() {
+                            status.set_status(message, false).await;
+                        };
+                    }
+
+                    if let Some((response, body)) = msg {
+                        println!("{} {}", response, body);
+                    }
                 }
             }
         }));

@@ -107,7 +107,7 @@ mod tests {
         };
         let mut roon = RoonApi::new(info, Box::new(on_core_lost));
         let provided: HashMap<String, Svc> = HashMap::new();
-        let (mut handles, mut core_rx) = roon.start_discovery(provided, None).await.unwrap();
+        let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
         handles.push(tokio::spawn(async move {
             if let Some((core, _)) = core_rx.recv().await {
                 if let Some(core) = core {
