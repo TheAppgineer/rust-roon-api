@@ -27,7 +27,7 @@ type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    core_tx: Option<Sender<(Option<Core>, Option<(String, serde_json::Value)>)>>,
+    core_tx: Option<Sender<(Option<Core>, Option<(serde_json::Value, Parsed)>)>>,
     on_core_lost: Arc<Mutex<CoreEvent>>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<Mutex<Option<Core>>>
@@ -45,7 +45,7 @@ pub struct Core {
 
 impl Core {
     #[cfg(feature = "transport")]
-    pub fn get_transport(&mut self) -> Option<&transport::Transport> {
+    pub fn get_transport(&mut self) -> Option<&mut transport::Transport> {
         if let Some(services) = self.services.as_mut() {
             for svc in services {
                 match svc {
@@ -104,7 +104,7 @@ impl RoonApi {
         mut provided: HashMap<String, Svc>,
         #[cfg(all(feature = "status", not(any(feature = "transport"))))] services: Option<Vec<Services>>,
         #[cfg(any(feature = "transport"))] mut services: Option<Vec<Services>>,
-    ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(Option<Core>, Option<(String, serde_json::Value)>)>)> {
+    ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(Option<Core>, Option<(serde_json::Value, Parsed)>)>)> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
         let mut sood = Sood::new();
@@ -113,7 +113,7 @@ impl RoonApi {
         let (handle, mut sood_rx) = sood.start().await?;
         let (moo_tx, mut moo_rx) = mpsc::channel::<(Moo, MooSender)>(4);
         let (msg_tx, mut msg_rx) = mpsc::channel::<(usize, Option<serde_json::Value>)>(4);
-        let (core_tx, core_rx) = mpsc::channel::<(Option<Core>, Option<(String, serde_json::Value)>)>(4);
+        let (core_tx, core_rx) = mpsc::channel::<(Option<Core>, Option<(serde_json::Value, Parsed)>)>(4);
 
         self.core_tx = Some(core_tx.clone());
 
@@ -459,9 +459,21 @@ impl RoonApi {
                             response_ids.insert(index, request_id);
                         }
                     } else {
-                        let response = msg["name"].as_str().unwrap();
-                        let msg = msg["body"].to_owned();
-                        core_tx.send((None, Some((response.to_owned(), msg)))).await.unwrap();
+                        #[cfg(any(feature = "transport"))]
+                        if let Some(svcs) = services.as_ref() {
+                            for svc in svcs {
+                                match svc {
+                                    #[cfg(feature = "transport")]
+                                    Services::Transport(transport) => {
+                                        let parsed = transport.parse_msg(&msg);
+                                        core_tx.send((None, Some((msg, parsed)))).await.unwrap();
+                                        break;
+                                    }
+                                    #[cfg(feature = "status")]
+                                    _ => ()
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -634,6 +646,22 @@ pub enum Services {
     Transport(transport::Transport),
     #[cfg(feature = "status")]
     Status(status::Status),
+}
+
+#[cfg(any(feature = "transport"))]
+#[derive(Debug)]
+pub enum Parsed {
+    None,
+    Zones(Vec<transport::Zone>),
+    ZonesSeek(Vec<transport::ZoneSeek>),
+    Outputs(Vec<transport::Output>),
+    Queue(Vec<transport::QueueItem>)
+}
+
+#[cfg(not(any(feature = "transport")))]
+#[derive(Debug)]
+pub enum Parsed {
+    None
 }
 
 #[cfg(test)]

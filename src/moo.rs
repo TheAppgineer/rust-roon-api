@@ -72,6 +72,9 @@ impl Moo {
 
         self.msg_tx.send(msg_string).await?;
 
+        let mut next_req_id = self.req_id.lock().unwrap();
+        *next_req_id += 1;
+
         Ok(req_id)
     }
 
@@ -97,22 +100,22 @@ impl Moo {
         self.msg_tx.send(msg_string).await
     }
 
-    pub fn create_msg_string(request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> String {
+    pub fn create_msg_string(req_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> String {
         let action = hdr[0];
         let state = hdr[1];
-        let mut msg_string = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, request_id);
+        let mut msg_string = format!("MOO/1 {} {}\nRequest-Id: {}\n", action, state, req_id);
 
         if let Some(body) = body {
             let body = body.to_string();
 
-            println!("-> {} {} {} {}", action, request_id, state, body);
+            println!("-> {} {} {} {}", action, req_id, state, body);
 
             let body_len = body.as_bytes().len();
 
             msg_string.push_str(format!("Content-Length: {}\nContent-Type: application/json\n\n", body_len).as_str());
             msg_string.push_str(&body);
         } else {
-            println!("-> {} {} {}", action, request_id, state);
+            println!("-> {} {} {}", action, req_id, state);
 
             msg_string.push('\n');
         }
@@ -145,11 +148,6 @@ impl MooSender {
     }
 
     pub async fn send_msg_string(&mut self, msg_string: &str) -> Result<usize, Error> {
-        if msg_string.contains("REQUEST") {
-            let mut req_id = self.req_id.lock().unwrap();
-            *req_id += 1;
-        }
-
         self.write.send(Message::Binary(Vec::from(msg_string))).await?;
 
         Ok(self.id)

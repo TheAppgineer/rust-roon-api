@@ -130,17 +130,13 @@ mod tests {
 
         handles.push(tokio::spawn(async move {
             loop {
-                if let Some((core, msg)) = core_rx.recv().await {
+                if let Some((core, _)) = core_rx.recv().await {
                     if let Some(mut core) = core {
                         let message = format!("Core found: {}\nversion {}", core.display_name, core.display_version);
 
                         if let Some(status) = core.get_status() {
                             status.set_status(message, false).await;
                         };
-                    }
-
-                    if let Some((response, body)) = msg {
-                        println!("{} {}", response, body);
                     }
                 }
             }
