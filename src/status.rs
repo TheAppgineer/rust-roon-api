@@ -102,7 +102,7 @@ mod tests {
     use serde_json::json;
 
     use crate::status::{self, Status};
-    use crate::Services;
+    use crate::{Services, ROON_API_VERSION};
 
     use super::*;
 
@@ -111,7 +111,7 @@ mod tests {
         let info = json!({
             "extension_id": "com.theappgineer.rust-roon-api",
             "display_name": "Rust Roon API",
-            "display_version": "0.1.0",
+            "display_version": ROON_API_VERSION,
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });

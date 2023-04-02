@@ -78,7 +78,7 @@ impl Moo {
         Ok(req_id)
     }
 
-    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<usize, SendError<String>> {
+    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<(usize, usize), SendError<String>> {
         let body;
 
         let mut sub_key = *self.sub_key.lock().unwrap();
@@ -92,6 +92,16 @@ impl Moo {
         }
 
         let name = format!("{}/subscribe_{}", svc_name, req_name);
+
+        match self.send_req(name, body).await {
+            Ok(req_id) => Ok((req_id, sub_key)),
+            Err(err) => Err(err)
+        }
+    }
+
+    pub async fn send_unsub_req(&self, svc_name: &str, req_name: &str, sub_key: usize) -> Result<usize, SendError<String>> {
+        let name = format!("{}/unsubscribe_{}", svc_name, req_name);
+        let body = Some(json!({"subscription_key": sub_key}));
 
         self.send_req(name, body).await
     }

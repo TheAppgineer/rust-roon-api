@@ -92,13 +92,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::ROON_API_VERSION;
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         let info = json!({
             "extension_id": "com.theappgineer.rust-roon-api",
             "display_name": "Rust Roon API",
-            "display_version": "0.1.0",
+            "display_version": ROON_API_VERSION,
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });

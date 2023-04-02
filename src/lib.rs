@@ -21,6 +21,8 @@ pub mod status;
 #[cfg(feature = "transport")]
 pub mod transport;
 
+pub const ROON_API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 type RespProps = (&'static[&'static str], Option<serde_json::Value>);
 type CoreEvent = dyn Fn(&Core) + Send;
 type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps + Send>;
@@ -202,7 +204,6 @@ impl RoonApi {
                     if let Some(mut msg) = sood_rx.recv().await {
                         if let Some((unique_id, port)) = is_service_response(SERVICE_ID, &mut msg) {
                             if !sood_conns.contains(&unique_id) {
-                                println!("sood connection for unique_id: {}", unique_id);
                                 sood_conns.push(unique_id.to_owned());
     
                                 if let Ok((moo, mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port).await {
@@ -465,7 +466,7 @@ impl RoonApi {
                                 match svc {
                                     #[cfg(feature = "transport")]
                                     Services::Transport(transport) => {
-                                        let parsed = transport.parse_msg(&msg);
+                                        let parsed = transport.parse_msg(&msg).await;
                                         core_tx.send((None, Some((msg, parsed)))).await.unwrap();
                                         break;
                                     }
@@ -654,7 +655,9 @@ pub enum Parsed {
     None,
     Zones(Vec<transport::Zone>),
     ZonesSeek(Vec<transport::ZoneSeek>),
+    ZonesRemoved(Vec<String>),
     Outputs(Vec<transport::Output>),
+    OutputsRemoved(Vec<String>),
     Queue(Vec<transport::QueueItem>)
 }
 
@@ -676,7 +679,7 @@ mod tests {
         let info = json!({
             "extension_id": "com.theappgineer.rust-roon-api",
             "display_name": "Rust Roon API",
-            "display_version": "0.1.0",
+            "display_version": ROON_API_VERSION,
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });

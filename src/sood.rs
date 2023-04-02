@@ -190,7 +190,7 @@ impl Sood {
             for iface in iface {
                 if !iface.is_loopback() {
                     if let if_addrs::IfAddr::V4(address) = &iface.addr {
-                        iface_change |= self.listen_iface(address.ip, address.netmask, iface.name).await;
+                        iface_change |= self.listen_iface(address.ip, address.netmask).await;
                     }
                 }
             }
@@ -211,11 +211,9 @@ impl Sood {
         Ok(iface_change)
     }
 
-    async fn listen_iface(&mut self, ip: Ipv4Addr, netmask: Ipv4Addr, name: String) -> bool {
+    async fn listen_iface(&mut self, ip: Ipv4Addr, netmask: Ipv4Addr) -> bool {
         let mut new_iface = false;
         let mut multicast = self.multicast.lock().await;
-
-        println!("{} {} {}", name, ip, netmask);
 
         if multicast.contains_key(&ip) {
             multicast.get_mut(&ip).unwrap().seq = self.iface_seq;

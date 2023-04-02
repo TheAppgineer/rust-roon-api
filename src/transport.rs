@@ -1,6 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::Mutex;
 
 use crate::{Moo, Parsed};
 
@@ -108,18 +109,18 @@ pub struct ThreeLine {
 #[derive(Clone, Debug)]
 pub struct Transport {
     moo: Option<Moo>,
-    zone_req_id: Arc<Mutex<Option<usize>>>,
-    output_req_id: Arc<Mutex<Option<usize>>>,
-    queue_req_id: Arc<Mutex<Option<usize>>>
+    zone_sub: Arc<Mutex<Option<(usize, usize)>>>,
+    output_sub: Arc<Mutex<Option<(usize, usize)>>>,
+    queue_sub: Arc<Mutex<Option<(usize, usize)>>>
 }
 
 impl Transport {
     pub fn new() -> Self {
         Self {
             moo: None,
-            zone_req_id: Arc::new(Mutex::new(None)),
-            output_req_id: Arc::new(Mutex::new(None)),
-            queue_req_id: Arc::new(Mutex::new(None))
+            zone_sub: Arc::new(Mutex::new(None)),
+            output_sub: Arc::new(Mutex::new(None)),
+            queue_sub: Arc::new(Mutex::new(None))
         }
     }
 
@@ -137,19 +138,41 @@ impl Transport {
 
     pub async fn subscribe_zones(&mut self) {
         if let Some(moo) = &self.moo {
-            let req_id = moo.send_sub_req(SVCNAME, "zones", None).await.ok();
-            let mut req_id_option = self.zone_req_id.lock().unwrap();
+            let sub = moo.send_sub_req(SVCNAME, "zones", None).await.ok();
 
-            *req_id_option = req_id;
+            *self.zone_sub.lock().await = sub;
+        }
+    }
+
+    pub async fn unsubscribe_zones(&mut self) {
+        if let Some(moo) = &self.moo {
+            let mut sub = self.zone_sub.lock().await;
+
+            if let Some((_, sub_key)) = *sub {
+                moo.send_unsub_req(SVCNAME, "zones", sub_key).await.ok();
+
+                *sub = None;
+            }
         }
     }
 
     pub async fn subscribe_outputs(&mut self) {
         if let Some(moo) = &self.moo {
-            let req_id = moo.send_sub_req(SVCNAME, "outputs", None).await.ok();
-            let mut req_id_option = self.output_req_id.lock().unwrap();
+            let sub = moo.send_sub_req(SVCNAME, "outputs", None).await.ok();
 
-            *req_id_option = req_id;
+            *self.output_sub.lock().await = sub;
+        }
+    }
+
+    pub async fn unsubscribe_outputs(&mut self) {
+        if let Some(moo) = &self.moo {
+            let mut sub = self.output_sub.lock().await;
+
+            if let Some((_, sub_key)) = *sub {
+                moo.send_unsub_req(SVCNAME, "outputs", sub_key).await.ok();
+
+                *sub = None;
+            }
         }
     }
 
@@ -159,10 +182,21 @@ impl Transport {
                 "zone_or_output_id": zone_or_output_id,
                 "max_item_count": max_item_count
             });
-            let req_id = moo.send_sub_req(SVCNAME, "queue", Some(args)).await.ok();
-            let mut req_id_option = self.queue_req_id.lock().unwrap();
+            let sub = moo.send_sub_req(SVCNAME, "queue", Some(args)).await.ok();
 
-            *req_id_option = req_id;
+            *self.queue_sub.lock().await = sub;
+        }
+    }
+
+    pub async fn unsubscribe_queue(&mut self) {
+        if let Some(moo) = &self.moo {
+            let mut sub = self.queue_sub.lock().await;
+
+            if let Some((_, sub_key)) = *sub {
+                moo.send_unsub_req(SVCNAME, "queue", sub_key).await.ok();
+
+                *sub = None;
+            }
         }
     }
 
@@ -179,23 +213,32 @@ impl Transport {
         }
     }
 
-    pub fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
+    pub async fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
         let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
         let response = msg["name"].as_str().unwrap();
         let body = msg["body"].to_owned();
 
-        if let Some(zone_req_id) = *self.zone_req_id.lock().unwrap() {
+        if let Some((zone_req_id, _)) = *self.zone_sub.lock().await {
             if req_id == zone_req_id {
                 let mut zones: Option<Vec<Zone>> = None;
 
                 if response == "Changed" {
                     if body["zones_changed"].is_array() {
                         zones = serde_json::from_value(body["zones_changed"].to_owned()).ok();
+                    } else if body["zones_added"].is_array() {
+                        zones = serde_json::from_value(body["zones_added"].to_owned()).ok();
                     } else if body["zones_seek_changed"].is_array() {
                         let zones_seek: Option<Vec<ZoneSeek>> = serde_json::from_value(body["zones_seek_changed"].to_owned()).ok();
 
                         return match zones_seek {
                             Some(zones_seek) => Parsed::ZonesSeek(zones_seek),
+                            None => Parsed::None
+                        }
+                    } else if body["zones_removed"].is_array() {
+                        let zones_removed: Option<Vec<String>> = serde_json::from_value(body["zones_removed"].to_owned()).ok();
+
+                        return match zones_removed {
+                            Some(zones_removed) => Parsed::ZonesRemoved(zones_removed),
                             None => Parsed::None
                         }
                     }
@@ -212,13 +255,22 @@ impl Transport {
             }
         }
 
-        if let Some(output_req_id) = *self.output_req_id.lock().unwrap() {
+        if let Some((output_req_id, _)) = *self.output_sub.lock().await {
             if req_id == output_req_id {
                 let mut outputs: Option<Vec<Output>> = None;
 
                 if response == "Changed" {
                     if body["outputs_changed"].is_array() {
                         outputs = serde_json::from_value(body["outputs_changed"].to_owned()).ok();
+                    } else if body["outputs_added"].is_array() {
+                        outputs = serde_json::from_value(body["outputs_added"].to_owned()).ok();
+                    } else if body["outputs_removed"].is_array() {
+                        let outputs_removed: Option<Vec<String>> = serde_json::from_value(body["outputs_removed"].to_owned()).ok();
+
+                        return match outputs_removed {
+                            Some(outputs_removed) => Parsed::OutputsRemoved(outputs_removed),
+                            None => Parsed::None
+                        }
                     }
                 } else if response == "Subscribed" {
                     if body["outputs"].is_array() {
@@ -233,7 +285,7 @@ impl Transport {
             }
         }
 
-        if let Some(queue_req_id) = *self.queue_req_id.lock().unwrap() {
+        if let Some((queue_req_id, _)) = *self.queue_sub.lock().await {
             if req_id == queue_req_id {
                 let mut queue: Option<Vec<QueueItem>> = None;
 
@@ -264,14 +316,14 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{RoonApi, Core, Svc, Services};
+    use crate::{RoonApi, Core, Svc, Services, ROON_API_VERSION};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         let info = json!({
             "extension_id": "com.theappgineer.rust-roon-api",
             "display_name": "Rust Roon API",
-            "display_version": "0.1.0",
+            "display_version": ROON_API_VERSION,
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
@@ -305,6 +357,11 @@ mod tests {
                         match parsed {
                             Parsed::Zones(_zones) => (),
                             Parsed::ZonesSeek(_zones_seek) => (),
+                            Parsed::ZonesRemoved(_zones_removed) => {
+                                if let Some(transport) = transport.as_mut() {
+                                    transport.unsubscribe_zones().await;
+                                }
+                            }
                             Parsed::Outputs(outputs) => {
                                 let output_id = &outputs[0].output_id;
     
@@ -312,6 +369,7 @@ mod tests {
                                     transport.subscribe_queue(&output_id, 20).await;
                                 }
                             }
+                            Parsed::OutputsRemoved(_outputs_removed) => (),
                             Parsed::Queue(_queue) => (),
                             _ => ()
                         }
