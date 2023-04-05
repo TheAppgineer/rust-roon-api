@@ -102,7 +102,7 @@ mod tests {
     use serde_json::json;
 
     use crate::status::{self, Status};
-    use crate::{Services, ROON_API_VERSION};
+    use crate::{CoreEvent, Services, ROON_API_VERSION};
 
     use super::*;
 
@@ -115,15 +115,11 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let on_core_lost = move |core: &Core| {
-            println!("Core lost: {}", core.display_name);
-        };
-
-        let mut roon = RoonApi::new(info, Box::new(on_core_lost));
+        let mut roon = RoonApi::new(info);
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];
-
         let mut provided: HashMap<String, Svc> = HashMap::new();
+
         provided.insert(status::SVCNAME.to_owned(), svc);
 
         let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
@@ -131,12 +127,22 @@ mod tests {
         handles.push(tokio::spawn(async move {
             loop {
                 if let Some((core, _)) = core_rx.recv().await {
-                    if let Some(mut core) = core {
-                        let message = format!("Core found: {}\nversion {}", core.display_name, core.display_version);
+                    match core {
+                        CoreEvent::Found(mut core) => {
+                            let message = format!("Core found: {}, version {}", core.display_name, core.display_version);
 
-                        if let Some(status) = core.get_status() {
-                            status.set_status(message, false).await;
-                        };
+                            if let Some(status) = core.get_status() {
+                                status.set_status(message, false).await;
+                            };
+                        }
+                        CoreEvent::Lost(core) => {
+                            let message = format!("Core lost: {}, version {}", core.display_name, core.display_version);
+
+                            if let Some(status) = core.get_status() {
+                                status.set_status(message, false).await;
+                            };
+                        }
+                        _ => ()
                     }
                 }
             }

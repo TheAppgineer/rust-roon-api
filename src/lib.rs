@@ -5,7 +5,7 @@ use moo::{Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
 use serde_json::json;
 use tokio::select;
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 
@@ -24,13 +24,11 @@ pub mod transport;
 pub const ROON_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 type RespProps = (&'static[&'static str], Option<serde_json::Value>);
-type CoreEvent = dyn Fn(&Core) + Send;
 type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps + Send>;
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    core_tx: Option<Sender<(Option<Core>, Option<(serde_json::Value, Parsed)>)>>,
-    on_core_lost: Arc<Mutex<CoreEvent>>,
+    lost_moo: Arc<Mutex<Option<usize>>>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<Mutex<Option<Core>>>
 }
@@ -43,6 +41,13 @@ pub struct Core {
     moo: Moo,
     #[cfg(any(feature = "status", feature = "transport"))]
     services: Option<Vec<Services>>
+}
+
+#[derive(Debug)]
+pub enum CoreEvent {
+    None,
+    Found(Core),
+    Lost(Core)
 }
 
 impl Core {
@@ -86,7 +91,7 @@ impl Core {
 }
 
 impl RoonApi {
-    pub fn new(options: serde_json::Value, on_core_lost: Box<CoreEvent>) -> Self {
+    pub fn new(options: serde_json::Value) -> Self {
         let mut reg_info = options;
 
         reg_info["provided_services"] = json!([]);
@@ -94,8 +99,7 @@ impl RoonApi {
 
         Self {
             reg_info,
-            core_tx: None,
-            on_core_lost: Arc::new(Mutex::new(on_core_lost)),
+            lost_moo: Arc::new(Mutex::new(None)),
             #[cfg(feature = "pairing")]
             paired_core: Arc::new(Mutex::new(None))
         }
@@ -106,7 +110,7 @@ impl RoonApi {
         mut provided: HashMap<String, Svc>,
         #[cfg(all(feature = "status", not(any(feature = "transport"))))] services: Option<Vec<Services>>,
         #[cfg(any(feature = "transport"))] mut services: Option<Vec<Services>>,
-    ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(Option<Core>, Option<(serde_json::Value, Parsed)>)>)> {
+    ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(CoreEvent, Option<(serde_json::Value, Parsed)>)>)> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
         let mut sood = Sood::new();
@@ -115,9 +119,7 @@ impl RoonApi {
         let (handle, mut sood_rx) = sood.start().await?;
         let (moo_tx, mut moo_rx) = mpsc::channel::<(Moo, MooSender)>(4);
         let (msg_tx, mut msg_rx) = mpsc::channel::<(usize, Option<serde_json::Value>)>(4);
-        let (core_tx, core_rx) = mpsc::channel::<(Option<Core>, Option<(serde_json::Value, Parsed)>)>(4);
-
-        self.core_tx = Some(core_tx.clone());
+        let (core_tx, core_rx) = mpsc::channel::<(CoreEvent, Option<(serde_json::Value, Parsed)>)>(4);
 
         let ping = Ping::new(self);
 
@@ -125,7 +127,12 @@ impl RoonApi {
 
         #[cfg(feature = "pairing")]
         {
-            let pairing = pairing::Pairing::new(self);
+            let lost_moo = self.lost_moo.clone();
+            let on_core_lost = move |moo_id: usize| {
+                let mut lost_moo = lost_moo.lock().unwrap();
+                *lost_moo = Some(moo_id);
+            };
+            let pairing = pairing::Pairing::new(self, Box::new(on_core_lost));
 
             provided.insert(pairing.name.to_owned(), pairing);
         }
@@ -259,7 +266,7 @@ impl RoonApi {
         let paired_core = self.paired_core.clone();
 
         let mut body = self.reg_info.clone();
-        let on_core_lost = self.on_core_lost.clone();
+        let lost_moo = self.lost_moo.clone();
         let moo_receive = async move {
             let mut moo_senders: Vec<MooSender> = Vec::new();
             let mut cores: Vec<Core> = Vec::new();
@@ -270,7 +277,6 @@ impl RoonApi {
 
             loop {
                 let mut new_moo = None;
-                let mut lost_moo = None;
                 let mut mooid_msg: Option<(usize, serde_json::Value)> = None;
 
                 if moo_senders.len() == 0 {
@@ -309,7 +315,8 @@ impl RoonApi {
                                     mooid_msg = Some((moo_id, msg));
                                 }
                                 None => {
-                                    lost_moo = Some(moo_id);
+                                    let mut lost_moo = lost_moo.lock().unwrap();
+                                    *lost_moo = Some(moo_id);
                                 }
                             }
                         }
@@ -329,12 +336,6 @@ impl RoonApi {
                 if let Some((moo, moo_sender)) = new_moo {
                     moo_senders.push(moo_sender);
                     user_moos.insert(moo.id, moo);
-                } else if let Some(moo_id) = lost_moo {
-                    let core = cores.remove(moo_id);
-                    let on_core_lost = on_core_lost.lock().unwrap();
-
-                    moo_senders.remove(moo_id);
-                    on_core_lost(&core);
                 } else if let Some((index, msg)) = mooid_msg {
                     if msg["request_id"] == "0" && msg["body"]["core_id"].is_string() {
                         let settings = Self::load_config("roonstate");
@@ -374,7 +375,7 @@ impl RoonApi {
                             {
                                 let mut paired_core = paired_core.lock().unwrap();
 
-                                match &*paired_core {
+                                match paired_core.as_ref() {
                                     None => {
                                         if let Some(set_core_id) = settings.get("paired_core_id") {
                                             if set_core_id.as_str().unwrap() == core.core_id {
@@ -419,7 +420,7 @@ impl RoonApi {
                             }
                         }
 
-                        core_tx.send((Some(core.clone()), None)).await.unwrap();
+                        core_tx.send((CoreEvent::Found(core.clone()), None)).await.unwrap();
 
                         Self::save_config("roonstate", settings).unwrap();
 
@@ -467,7 +468,7 @@ impl RoonApi {
                                     #[cfg(feature = "transport")]
                                     Services::Transport(transport) => {
                                         let parsed = transport.parse_msg(&msg).await;
-                                        core_tx.send((None, Some((msg, parsed)))).await.unwrap();
+                                        core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
                                         break;
                                     }
                                     #[cfg(feature = "status")]
@@ -475,6 +476,18 @@ impl RoonApi {
                                 }
                             }
                         }
+                    }
+                } else {
+                    let moo_id = (*lost_moo.lock().unwrap()).clone();
+
+                    if let Some(moo_id) = moo_id {
+                        let core = cores.remove(moo_id);
+
+                        moo_senders.remove(moo_id);
+                        core_tx.send((CoreEvent::Lost(core), None)).await.unwrap();
+
+                        let mut lost_moo = lost_moo.lock().unwrap();
+                        *lost_moo = None;
                     }
                 }
             }
@@ -683,17 +696,20 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
-        let on_core_lost = move |core: &Core| {
-            println!("Core lost: {}", core.display_name);
-        };
-        let mut roon = RoonApi::new(info, Box::new(on_core_lost));
+        let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
         let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             if let Some((core, _)) = core_rx.recv().await {
-                if let Some(core) = core {
-                    println!("Core found: {}, version {}", core.display_name, core.display_version);
+                match core {
+                    CoreEvent::Found(core) => {
+                        println!("Core found: {}, version {}", core.display_name, core.display_version);
+                    }
+                    CoreEvent::Lost(core) => {
+                        println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                    }
+                    _ => ()
                 }
             }
         }));

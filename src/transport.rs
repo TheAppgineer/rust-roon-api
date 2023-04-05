@@ -316,7 +316,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{RoonApi, Core, Svc, Services, ROON_API_VERSION};
+    use crate::{RoonApi, CoreEvent, Svc, Services, ROON_API_VERSION};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
@@ -327,11 +327,8 @@ mod tests {
             "publisher": "The Appgineer",
             "email": "theappgineer@gmail.com"
         });
+        let mut roon = RoonApi::new(info);
         let services = vec![Services::Transport(Transport::new())];
-        let on_core_lost = move |core: &Core| {
-            println!("Core lost: {}", core.display_name);
-        };
-        let mut roon = RoonApi::new(info, Box::new(on_core_lost));
         let provided: HashMap<String, Svc> = HashMap::new();
         let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
 
@@ -339,18 +336,24 @@ mod tests {
             let mut transport = None;
 
             loop {
-                if let Some((mut core, msg)) = core_rx.recv().await {
-                    if let Some(core) = core.as_mut() {
-                        println!("Core found: {}, version {}", core.display_name, core.display_version);
+                if let Some((core, msg)) = core_rx.recv().await {
+                    match core {
+                        CoreEvent::Found(mut core) => {
+                            println!("Core found: {}, version {}", core.display_name, core.display_version);
 
-                        transport = if let Some(transport) = core.get_transport() {
-                            transport.subscribe_zones().await;
-                            transport.subscribe_outputs().await;
-
-                            Some(transport.clone())
-                        } else {
-                            None
+                            transport = if let Some(transport) = core.get_transport() {
+                                transport.subscribe_zones().await;
+                                transport.subscribe_outputs().await;
+    
+                                Some(transport.clone())
+                            } else {
+                                None
+                            }
                         }
+                        CoreEvent::Lost(core) => {
+                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                        }
+                        _ => ()
                     }
 
                     if let Some((_, parsed)) = msg {
