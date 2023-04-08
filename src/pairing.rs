@@ -7,13 +7,13 @@ pub const SVCNAME: &str = "com.roonlabs.pairing:1";
 pub struct Pairing;
 
 impl Pairing {
-    pub fn new(roon: &RoonApi, on_core_lost: Box<dyn Fn(usize) + Send>) -> Svc {
+    pub fn new(roon: &RoonApi, on_core_lost: Box<dyn Fn(String) + Send>) -> Svc {
         let mut spec = SvcSpec::new(SVCNAME);
         let paired_core = roon.paired_core.clone();
         let get_pairing = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             match paired_core.lock().unwrap().as_ref() {
                 Some(paired_core) => {
-                    let body = json!({"paired_core_id": paired_core.core_id});
+                    let body = json!({"paired_core_id": paired_core.id});
 
                     (&["COMPLETE", "Success"], Some(body))
                 }
@@ -31,21 +31,21 @@ impl Pairing {
                 let mut paired_core = paired_core.lock().unwrap();
 
                 if let Some(paired_core) = paired_core.as_ref() {
-                    if paired_core.core_id == core.core_id {
+                    if paired_core.id == core.id {
                         return (&[], None)
                     } else {
-                        on_core_lost(paired_core.moo.id);
+                        on_core_lost(paired_core.id.to_owned());
                     }
                 }
 
                 let mut settings = RoonApi::load_config("roonstate");
 
-                settings["paired_core_id"] = core.core_id.clone().into();
+                settings["paired_core_id"] = core.id.clone().into();
                 RoonApi::save_config("roonstate", settings).unwrap();
 
                 *paired_core = Some(core.to_owned());
 
-                let body = json!({"paired_core_id": core.core_id});
+                let body = json!({"paired_core_id": core.id});
 
                 (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))
             } else {
@@ -59,7 +59,7 @@ impl Pairing {
         let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
             match &*paired_core.lock().unwrap() {
                 Some(paired_core) => {
-                    let body = json!({"paired_core_id": paired_core.core_id});
+                    let body = json!({"paired_core_id": paired_core.id});
 
                     (&["CONTINUE", "Subscribed"], Some(body))
                 }
@@ -105,15 +105,17 @@ mod tests {
         let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
 
         handles.push(tokio::spawn(async move {
-            if let Some((core, _)) = core_rx.recv().await {
-                match core {
-                    CoreEvent::Found(core) => {
-                        println!("Core found: {}, version {}", core.display_name, core.display_version);
+            loop {
+                if let Some((core, _)) = core_rx.recv().await {
+                    match core {
+                        CoreEvent::Found(core) => {
+                            println!("Core found: {}, version {}", core.display_name, core.display_version);
+                        }
+                        CoreEvent::Lost(core) => {
+                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                        }
+                        _ => ()
                     }
-                    CoreEvent::Lost(core) => {
-                        println!("Core lost: {}, version {}", core.display_name, core.display_version);
-                    }
-                    _ => ()
                 }
             }
         }));

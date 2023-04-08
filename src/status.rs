@@ -63,7 +63,9 @@ impl Status {
         self.moo = Some(moo);
     }
 
-    pub async fn set_status(&self, message: String, is_error: bool) {
+    pub async fn set_status(&self, message: String, is_error: bool) -> Option<()> {
+        let mut result = None;
+
         if let Some(moo) = &self.moo {
             let hdr = ["CONTINUE", "Changed"];
             let body = json!({
@@ -85,13 +87,16 @@ impl Status {
 
             if let Some(request_id) = response_ids.get(&moo.id) {
                 let msg_string = Moo::create_msg_string(*request_id, &hdr, Some(&body));
-                moo.send_msg_string(msg_string).await.unwrap();
+
+                result = moo.send_msg_string(msg_string).await.ok();
             }
         }
 
         let mut props = self.props.lock().unwrap();
 
         *props = (message, is_error);
+
+        result
     }
 }
 
@@ -136,11 +141,7 @@ mod tests {
                             };
                         }
                         CoreEvent::Lost(core) => {
-                            let message = format!("Core lost: {}, version {}", core.display_name, core.display_version);
-
-                            if let Some(status) = core.get_status() {
-                                status.set_status(message, false).await;
-                            };
+                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
                     }

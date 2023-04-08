@@ -28,7 +28,7 @@ type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    lost_moo: Arc<Mutex<Option<usize>>>,
+    lost_core_id: Arc<Mutex<Option<String>>>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<Mutex<Option<Core>>>
 }
@@ -37,7 +37,7 @@ pub struct RoonApi {
 pub struct Core {
     pub display_name: String,
     pub display_version: String,
-    core_id: String,
+    id: String,
     moo: Moo,
     #[cfg(any(feature = "status", feature = "transport"))]
     services: Option<Vec<Services>>
@@ -99,7 +99,7 @@ impl RoonApi {
 
         Self {
             reg_info,
-            lost_moo: Arc::new(Mutex::new(None)),
+            lost_core_id: Arc::new(Mutex::new(None)),
             #[cfg(feature = "pairing")]
             paired_core: Arc::new(Mutex::new(None))
         }
@@ -127,10 +127,10 @@ impl RoonApi {
 
         #[cfg(feature = "pairing")]
         {
-            let lost_moo = self.lost_moo.clone();
-            let on_core_lost = move |moo_id: usize| {
-                let mut lost_moo = lost_moo.lock().unwrap();
-                *lost_moo = Some(moo_id);
+            let lost_core_id = self.lost_core_id.clone();
+            let on_core_lost = move |core_id: String| {
+                let mut lost_core_id = lost_core_id.lock().unwrap();
+                *lost_core_id = Some(core_id);
             };
             let pairing = pairing::Pairing::new(self, Box::new(on_core_lost));
 
@@ -242,22 +242,22 @@ impl RoonApi {
                             }
                         }
                         Either::Left((None, _)) => (),
-                        Either::Right(((Err(_), moo_id, _), _)) => {
-                            lost_moo = Some(moo_id);
-                            msg_tx.send((moo_id, None)).await.unwrap();
+                        Either::Right(((Err(_), index, _), _)) => {
+                            lost_moo = Some(index);
+                            msg_tx.send((index, None)).await.unwrap();
                         }
-                        Either::Right(((Ok(msg), moo_id, _), _)) => {
-                            msg_tx.send((moo_id, Some(msg))).await.unwrap();
+                        Either::Right(((Ok(msg), index, _), _)) => {
+                            msg_tx.send((index, Some(msg))).await.unwrap();
                         }
                     }
                 }
 
                 if let Some(moo) = new_moo {
                     moo_receivers.push(moo);
-                } else if let Some(moo_id) = lost_moo {
-                    moo_receivers.remove(moo_id);
+                } else if let Some(index) = lost_moo {
+                    moo_receivers.remove(index);
 
-                    sood_conns.remove(moo_id);
+                    sood_conns.remove(index);
                 }
             }
         };
@@ -266,7 +266,7 @@ impl RoonApi {
         let paired_core = self.paired_core.clone();
 
         let mut body = self.reg_info.clone();
-        let lost_moo = self.lost_moo.clone();
+        let lost_core_id = self.lost_core_id.clone();
         let moo_receive = async move {
             let mut moo_senders: Vec<MooSender> = Vec::new();
             let mut cores: Vec<Core> = Vec::new();
@@ -277,15 +277,16 @@ impl RoonApi {
 
             loop {
                 let mut new_moo = None;
-                let mut mooid_msg: Option<(usize, serde_json::Value)> = None;
+                let mut index_msg: Option<(usize, serde_json::Value)> = None;
 
                 if moo_senders.len() == 0 {
                     new_moo = moo_rx.recv().await;
                 } else if response_ids.len() > 0 {
                     let mut msg_senders = Vec::new();
+                    let mut index: usize = 0;
 
-                    for moo in &mut moo_senders.iter_mut() {
-                        if let Some(request_id) = response_ids.get(&moo.id) {
+                    for moo in moo_senders.iter_mut() {
+                        if let Some(request_id) = response_ids.get(&index) {
                             let (hdr, body) = props_option.as_ref().unwrap();
 
                             if *request_id == 0 {
@@ -294,13 +295,12 @@ impl RoonApi {
                                 msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
                             }
                         }
+
+                        index += 1;
                     }
 
-                    for moo_id in join_all(msg_senders).await {
-                        if let Ok(moo_id) = moo_id {
-                            response_ids.remove(&moo_id);
-                        }
-                    }
+                    join_all(msg_senders).await;
+                    response_ids.clear();
                 } else {
                     let mut req_receivers = Vec::new();
 
@@ -309,14 +309,14 @@ impl RoonApi {
                     }
 
                     select! {
-                        Some((moo_id, msg)) = msg_rx.recv() => {
+                        Some((index, msg)) = msg_rx.recv() => {
                             match msg {
                                 Some(msg) => {
-                                    mooid_msg = Some((moo_id, msg));
+                                    index_msg = Some((index, msg));
                                 }
                                 None => {
-                                    let mut lost_moo = lost_moo.lock().unwrap();
-                                    *lost_moo = Some(moo_id);
+                                    let mut lost_core_id = lost_core_id.lock().unwrap();
+                                    *lost_core_id = Some(cores[index].id.to_owned());
                                 }
                             }
                         }
@@ -334,9 +334,9 @@ impl RoonApi {
                 }
 
                 if let Some((moo, moo_sender)) = new_moo {
+                    user_moos.insert(moo_senders.len(), moo);
                     moo_senders.push(moo_sender);
-                    user_moos.insert(moo.id, moo);
-                } else if let Some((index, msg)) = mooid_msg {
+                } else if let Some((index, msg)) = index_msg {
                     if msg["request_id"] == "0" && msg["body"]["core_id"].is_string() {
                         let settings = Self::load_config("roonstate");
                         let moo = moo_senders.get_mut(index).unwrap();
@@ -359,14 +359,14 @@ impl RoonApi {
                         let core = Core {
                             display_name: body["display_name"].as_str().unwrap().to_string(),
                             display_version: body["display_version"].as_str().unwrap().to_string(),
-                            core_id: body["core_id"].as_str().unwrap().to_string(),
+                            id: body["core_id"].as_str().unwrap().to_string(),
                             moo,
                             #[cfg(any(feature = "status", feature = "transport"))]
                             services: services.clone()
                         };
                         let mut settings = Self::load_config("roonstate");
 
-                        settings["tokens"][&core.core_id] = body["token"].as_str().unwrap().into();
+                        settings["tokens"][&core.id] = body["token"].as_str().unwrap().into();
 
                         #[cfg(feature = "pairing")]
                         {
@@ -378,18 +378,18 @@ impl RoonApi {
                                 match paired_core.as_ref() {
                                     None => {
                                         if let Some(set_core_id) = settings.get("paired_core_id") {
-                                            if set_core_id.as_str().unwrap() == core.core_id {
+                                            if set_core_id.as_str().unwrap() == core.id {
                                                 *paired_core = Some(core.to_owned());
-                                                paired_core_id = Some(core.core_id.to_owned());
+                                                paired_core_id = Some(core.id.to_owned());
                                             }
                                         } else {
                                             *paired_core = Some(core.to_owned());
-                                            paired_core_id = Some(core.core_id.to_owned());
-                                            settings["paired_core_id"] = core.core_id.to_owned().into();
+                                            paired_core_id = Some(core.id.to_owned());
+                                            settings["paired_core_id"] = core.id.to_owned().into();
                                         }
                                     }
                                     Some(paired_core) => {
-                                        if paired_core.core_id != core.core_id {
+                                        if paired_core.id != core.id {
                                             continue;
                                         }
                                     }
@@ -407,7 +407,11 @@ impl RoonApi {
                                         for (msg_key, req_id) in sub_types.iter() {
                                             if msg_key.contains("subscribe_pairing") {
                                                 let moo_id = msg_key[msg_key.len()..].parse::<usize>().unwrap();
-                                                response_ids.insert(moo_id, *req_id);
+                                                let index = moo_senders.iter().position(|moo| moo.id == moo_id);
+
+                                                if let Some(index) = index {
+                                                    response_ids.insert(index, *req_id);
+                                                }
                                             }
                                         }
                                     }
@@ -441,8 +445,8 @@ impl RoonApi {
                                     let split: Vec<&str> = msg_key.split(':').collect();
 
                                     if split[0] == sub_name {
-                                        let moo_id = split[1].parse::<usize>().unwrap();
-                                        response_ids.insert(moo_id, *req_id);
+                                        let index = split[1].parse::<usize>().unwrap();
+                                        response_ids.insert(index, *req_id);
                                     }
                                 }
 
@@ -478,16 +482,18 @@ impl RoonApi {
                         }
                     }
                 } else {
-                    let moo_id = (*lost_moo.lock().unwrap()).clone();
+                    let core_id = (*lost_core_id.lock().unwrap()).clone();
 
-                    if let Some(moo_id) = moo_id {
-                        let core = cores.remove(moo_id);
+                    if let Some(core_id) = core_id {
+                        if let Some(index) = cores.iter().position(|core| core.id == core_id) {
+                            let core = cores.remove(index);
 
-                        moo_senders.remove(moo_id);
-                        core_tx.send((CoreEvent::Lost(core), None)).await.unwrap();
+                            moo_senders.remove(index);
+                            core_tx.send((CoreEvent::Lost(core), None)).await.unwrap();
+                        }
 
-                        let mut lost_moo = lost_moo.lock().unwrap();
-                        *lost_moo = None;
+                        let mut lost_core_id = lost_core_id.lock().unwrap();
+                        *lost_core_id = None;
                     }
                 }
             }
@@ -527,9 +533,13 @@ impl RoonApi {
             let sub_name = sub.subscribe_name.clone();
             let unsub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> RespProps {
                 let mut sub_types = sub_types.lock().unwrap();
-                let sub_mooid = format!("{}{}", sub_name, core.unwrap().moo.id);
 
-                sub_types.remove(&sub_mooid);
+                if let Some(msg) = msg {
+                    let sub_key = msg["body"]["subscription_key"].as_str().unwrap();
+                    let msg_key = format!("{}:{}:{}", sub_name, core.unwrap().moo.id, sub_key);
+
+                    sub_types.remove(&msg_key);
+                }
 
                 if let Some(end) = &sub.end {
                     (end)(core, msg);
@@ -558,8 +568,9 @@ impl RoonApi {
 
                     for sub_name in &sub_names {
                         if let Some(core) = core {
-                            let sub_mooid = format!("{}{}", sub_name, core.moo.id);
-                            sub_types.remove(&sub_mooid);
+                            let sub_mooid = format!("{}:{}", sub_name, core.moo.id);
+
+                            sub_types.retain(|msg_key, _| !msg_key.contains(&sub_mooid));
                         }
                     }
                 }
@@ -701,15 +712,17 @@ mod tests {
         let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
 
         handles.push(tokio::spawn(async move {
-            if let Some((core, _)) = core_rx.recv().await {
-                match core {
-                    CoreEvent::Found(core) => {
-                        println!("Core found: {}, version {}", core.display_name, core.display_version);
+            loop {
+                if let Some((core, _)) = core_rx.recv().await {
+                    match core {
+                        CoreEvent::Found(core) => {
+                            println!("Core found: {}, version {}", core.display_name, core.display_version);
+                        }
+                        CoreEvent::Lost(core) => {
+                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                        }
+                        _ => ()
                     }
-                    CoreEvent::Lost(core) => {
-                        println!("Core lost: {}, version {}", core.display_name, core.display_version);
-                    }
-                    _ => ()
                 }
             }
         }));

@@ -135,13 +135,13 @@ impl Moo {
 }
 
 impl MooSender {
-    pub async fn send_req(&mut self, name: &str, body: Option<&serde_json::Value>) -> Result<usize, Error> {
+    pub async fn send_req(&mut self, name: &str, body: Option<&serde_json::Value>) -> Result<(), Error> {
         let req_id = self.req_id.lock().unwrap().to_owned();
 
         self.send_msg(req_id, &["REQUEST", name], body).await
     }
 
-    pub async fn send_msg(&mut self, request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> Result<usize, Error> {
+    pub async fn send_msg(&mut self, request_id: usize, hdr: &[&str], body: Option<&serde_json::Value>) -> Result<(), Error> {
         if hdr.len() > 1 {
             let action = hdr[0];
             let msg_string = Moo::create_msg_string(request_id, hdr, body);
@@ -154,13 +154,13 @@ impl MooSender {
             }
         }
 
-        Ok(self.id)
+        Ok(())
     }
 
-    pub async fn send_msg_string(&mut self, msg_string: &str) -> Result<usize, Error> {
+    pub async fn send_msg_string(&mut self, msg_string: &str) -> Result<(), Error> {
         self.write.send(Message::Binary(Vec::from(msg_string))).await?;
 
-        Ok(self.id)
+        Ok(())
     }
 }
 
