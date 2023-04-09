@@ -20,4 +20,5 @@ regex = "1.5.5"
 pairing = []
 status = []
 transport = ["pairing"]
+browse = ["pairing"]
 default = []

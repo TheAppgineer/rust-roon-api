@@ -12,14 +12,10 @@ use tokio::time::{sleep, Duration};
 pub mod moo;
 mod sood;
 
-#[cfg(feature = "pairing")]
-pub mod pairing;
-
-#[cfg(feature = "status")]
-pub mod status;
-
-#[cfg(feature = "transport")]
-pub mod transport;
+#[cfg(feature = "status")]    pub mod status;
+#[cfg(feature = "pairing")]   pub mod pairing;
+#[cfg(feature = "transport")] pub mod transport;
+#[cfg(feature = "browse")]    pub mod browse;
 
 pub const ROON_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -39,7 +35,7 @@ pub struct Core {
     pub display_version: String,
     id: String,
     moo: Moo,
-    #[cfg(any(feature = "status", feature = "transport"))]
+    #[cfg(any(feature = "status", feature = "transport", feature = "browse"))]
     services: Option<Vec<Services>>
 }
 
@@ -60,6 +56,25 @@ impl Core {
                         transport.set_moo(self.moo.clone());
 
                         return Some(transport)
+                    }
+                    #[cfg(any(feature = "status"))]
+                    _ => ()
+                }
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "browse")]
+    pub fn get_browse(&mut self) -> Option<&browse::Browse> {
+        if let Some(services) = self.services.as_mut() {
+            for svc in services {
+                match svc {
+                    Services::Browse(browse) => {
+                        browse.set_moo(self.moo.clone());
+
+                        return Some(browse)
                     }
                     #[cfg(any(feature = "status"))]
                     _ => ()
@@ -108,8 +123,8 @@ impl RoonApi {
     pub async fn start_discovery(
         &mut self,
         mut provided: HashMap<String, Svc>,
-        #[cfg(all(feature = "status", not(any(feature = "transport"))))] services: Option<Vec<Services>>,
-        #[cfg(any(feature = "transport"))] mut services: Option<Vec<Services>>,
+        #[cfg(all(feature = "status", not(any(feature = "transport", feature = "browse"))))] services: Option<Vec<Services>>,
+        #[cfg(any(feature = "transport", feature = "browse"))] mut services: Option<Vec<Services>>,
     ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(CoreEvent, Option<(serde_json::Value, Parsed)>)>)> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
         const QUERY: [(&str, &str); 1] = [("query_service_id", SERVICE_ID)];
@@ -137,13 +152,17 @@ impl RoonApi {
             provided.insert(pairing.name.to_owned(), pairing);
         }
 
-        #[cfg(any(feature = "transport"))]
+        #[cfg(any(feature = "transport", feature = "browse"))]
         if let Some(services) = &mut services {
             for svc in services {
                 match svc {
                     #[cfg(feature = "transport")]
                     Services::Transport(_) => {
                         self.reg_info["required_services"].as_array_mut().unwrap().push(json!(transport::SVCNAME));
+                    }
+                    #[cfg(feature = "browse")]
+                    Services::Browse(_) => {
+                        self.reg_info["required_services"].as_array_mut().unwrap().push(json!(browse::SVCNAME));
                     }
                     #[cfg(any(feature = "status"))]
                     _ => ()
@@ -361,7 +380,7 @@ impl RoonApi {
                             display_version: body["display_version"].as_str().unwrap().to_string(),
                             id: body["core_id"].as_str().unwrap().to_string(),
                             moo,
-                            #[cfg(any(feature = "status", feature = "transport"))]
+                            #[cfg(any(feature = "status", feature = "transport", feature = "browse"))]
                             services: services.clone()
                         };
                         let mut settings = Self::load_config("roonstate");
@@ -465,13 +484,19 @@ impl RoonApi {
                             response_ids.insert(index, request_id);
                         }
                     } else {
-                        #[cfg(any(feature = "transport"))]
+                        #[cfg(any(feature = "transport", feature = "browse"))]
                         if let Some(svcs) = services.as_ref() {
                             for svc in svcs {
                                 match svc {
                                     #[cfg(feature = "transport")]
                                     Services::Transport(transport) => {
                                         let parsed = transport.parse_msg(&msg).await;
+                                        core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
+                                        break;
+                                    }
+                                    #[cfg(feature = "browse")]
+                                    Services::Browse(browse) => {
+                                        let parsed = browse.parse_msg(&msg);
                                         core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
                                         break;
                                     }
@@ -667,28 +692,22 @@ pub struct Svc {
 
 #[derive(Clone, Debug)]
 pub enum Services {
-    #[cfg(feature = "transport")]
-    Transport(transport::Transport),
-    #[cfg(feature = "status")]
-    Status(status::Status),
+    #[cfg(feature = "status")]    Status(status::Status),
+    #[cfg(feature = "transport")] Transport(transport::Transport),
+    #[cfg(feature = "browse")]    Browse(browse::Browse),
 }
 
-#[cfg(any(feature = "transport"))]
 #[derive(Debug)]
 pub enum Parsed {
     None,
-    Zones(Vec<transport::Zone>),
-    ZonesSeek(Vec<transport::ZoneSeek>),
-    ZonesRemoved(Vec<String>),
-    Outputs(Vec<transport::Output>),
-    OutputsRemoved(Vec<String>),
-    Queue(Vec<transport::QueueItem>)
-}
-
-#[cfg(not(any(feature = "transport")))]
-#[derive(Debug)]
-pub enum Parsed {
-    None
+    #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
+    #[cfg(feature = "transport")] ZonesSeek(Vec<transport::ZoneSeek>),
+    #[cfg(feature = "transport")] ZonesRemoved(Vec<String>),
+    #[cfg(feature = "transport")] Outputs(Vec<transport::Output>),
+    #[cfg(feature = "transport")] OutputsRemoved(Vec<String>),
+    #[cfg(feature = "transport")] Queue(Vec<transport::QueueItem>),
+    #[cfg(feature = "browse")]    List(browse::List),
+    #[cfg(feature = "browse")]    Items(Vec<browse::Item>),
 }
 
 #[cfg(test)]

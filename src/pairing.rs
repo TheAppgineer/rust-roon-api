@@ -83,7 +83,7 @@ impl Pairing {
 }
 
 #[cfg(test)]
-#[cfg(all(feature = "pairing", not(feature = "transport")))]
+#[cfg(all(feature = "pairing", not(any(feature = "transport", feature = "browse"))))]
 mod tests {
     use std::collections::HashMap;
     use serde_json::json;
