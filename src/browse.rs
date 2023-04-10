@@ -95,7 +95,8 @@ mod tests {
             "display_name": "Rust Roon API",
             "display_version": ROON_API_VERSION,
             "publisher": "The Appgineer",
-            "email": "theappgineer@gmail.com"
+            "email": "theappgineer@gmail.com",
+            "log_level": "none"
         });
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Browse(Browse::new())];
@@ -141,6 +142,8 @@ mod tests {
                                         "set_display_offset": offset
                                     });
     
+                                    println!("[{}]", list.title);
+
                                     browse.load(opts).await;
                                 }
                             }

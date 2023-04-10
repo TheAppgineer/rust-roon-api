@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use futures_util::{FutureExt, future::{join_all, select_all, select, Either}};
-use moo::{Moo, MooReceiver, MooSender};
+use moo::{Moo, MooReceiver, MooSender, LogLevel};
 use sood::{Message, Sood};
 use serde_json::json;
 use tokio::select;
@@ -25,6 +25,7 @@ type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps
 pub struct RoonApi {
     reg_info: serde_json::Value,
     lost_core_id: Arc<Mutex<Option<String>>>,
+    log_level: Arc<LogLevel>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<Mutex<Option<Core>>>
 }
@@ -107,6 +108,13 @@ impl Core {
 
 impl RoonApi {
     pub fn new(options: serde_json::Value) -> Self {
+        let log_level = if options["log_level"] == "all" {
+            LogLevel::All
+        } else if options["log_level"] == "none" {
+            LogLevel::None
+        } else {
+            LogLevel::Default
+        };
         let mut reg_info = options;
 
         reg_info["provided_services"] = json!([]);
@@ -115,6 +123,7 @@ impl RoonApi {
         Self {
             reg_info,
             lost_core_id: Arc::new(Mutex::new(None)),
+            log_level: Arc::new(log_level),
             #[cfg(feature = "pairing")]
             paired_core: Arc::new(Mutex::new(None))
         }
@@ -205,6 +214,7 @@ impl RoonApi {
             }
         };
 
+        let log_level = self.log_level.clone();
         let sood_receive = async move {
             fn is_service_response(service_id: &str, msg: &mut Message) -> Option<(String, String)> {
                 let svc_id = msg.props.remove("service_id")?;
@@ -232,7 +242,7 @@ impl RoonApi {
                             if !sood_conns.contains(&unique_id) {
                                 sood_conns.push(unique_id.to_owned());
     
-                                if let Ok((moo, mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port).await {
+                                if let Ok((moo, mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port, log_level.clone()).await {
                                     moo_sender.send_req("com.roonlabs.registry:1/info", None).await.unwrap();
                                     new_moo = Some(moo_receiver);
                                     moo_tx.send((moo, moo_sender)).await.unwrap();
@@ -252,7 +262,7 @@ impl RoonApi {
                                     println!("sood connection for unique_id: {}", unique_id);
                                     sood_conns.push(unique_id.to_owned());
         
-                                    if let Ok((moo, mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port).await {
+                                    if let Ok((moo, mut moo_sender, moo_receiver)) = Moo::new(&msg.ip, &port, log_level.clone()).await {
                                         moo_sender.send_req("com.roonlabs.registry:1/info", None).await.unwrap();
                                         new_moo = Some(moo_receiver);        
                                         moo_tx.send((moo, moo_sender)).await.unwrap();
@@ -724,7 +734,8 @@ mod tests {
             "display_name": "Rust Roon API",
             "display_version": ROON_API_VERSION,
             "publisher": "The Appgineer",
-            "email": "theappgineer@gmail.com"
+            "email": "theappgineer@gmail.com",
+            "log_level": "all"
         });
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
