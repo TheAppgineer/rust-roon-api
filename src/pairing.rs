@@ -10,15 +10,15 @@ impl Pairing {
     pub fn new(roon: &RoonApi, on_core_lost: Box<dyn Fn(String) + Send>) -> Svc {
         let mut spec = SvcSpec::new(SVCNAME);
         let paired_core = roon.paired_core.clone();
-        let get_pairing = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+        let get_pairing = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             match paired_core.lock().unwrap().as_ref() {
                 Some(paired_core) => {
                     let body = json!({"paired_core_id": paired_core.id});
 
-                    (&["COMPLETE", "Success"], Some(body))
+                    vec![(&["COMPLETE", "Success"], Some(body))]
                 }
                 None => {
-                    (&["COMPLETE", "Success"], None)
+                    vec![(&["COMPLETE", "Success"], None)]
                 }
             }
         };
@@ -26,13 +26,13 @@ impl Pairing {
         spec.add_method("get_pairing", Box::new(get_pairing));
 
         let paired_core = roon.paired_core.clone();
-        let pair = move |core: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+        let pair = move |core: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             if let Some(core) = core {
                 let mut paired_core = paired_core.lock().unwrap();
 
                 if let Some(paired_core) = paired_core.as_ref() {
                     if paired_core.id == core.id {
-                        return (&[], None)
+                        return vec![(&[], None)]
                     } else {
                         on_core_lost(paired_core.id.to_owned());
                     }
@@ -47,26 +47,26 @@ impl Pairing {
 
                 let body = json!({"paired_core_id": core.id});
 
-                (&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))
+                vec![(&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))]
             } else {
-                (&[], None)
+                vec![(&[], None)]
             }
         };
 
         spec.add_method("pair", Box::new(pair));
 
         let paired_core = roon.paired_core.clone();
-        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             match &*paired_core.lock().unwrap() {
                 Some(paired_core) => {
                     let body = json!({"paired_core_id": paired_core.id});
 
-                    (&["CONTINUE", "Subscribed"], Some(body))
+                    vec![(&["CONTINUE", "Subscribed"], Some(body))]
                 }
                 None => {
                     let body = json!({"paired_core_id": "undefined"});
 
-                    (&["CONTINUE", "Subscribed"], Some(body))
+                    vec![(&["CONTINUE", "Subscribed"], Some(body))]
                 }
             }
         };

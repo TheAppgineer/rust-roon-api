@@ -13,6 +13,7 @@ pub mod moo;
 mod sood;
 
 #[cfg(feature = "status")]    pub mod status;
+#[cfg(feature = "settings")]  pub mod settings;
 #[cfg(feature = "pairing")]   pub mod pairing;
 #[cfg(feature = "transport")] pub mod transport;
 #[cfg(feature = "browse")]    pub mod browse;
@@ -20,7 +21,7 @@ mod sood;
 pub const ROON_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 type RespProps = (&'static[&'static str], Option<serde_json::Value>);
-type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> RespProps + Send>;
+type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> Vec<RespProps> + Send>;
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
@@ -58,7 +59,7 @@ impl Core {
 
                         return Some(transport)
                     }
-                    #[cfg(any(feature = "status"))]
+                    #[cfg(any(feature = "status", feature = "browse"))]
                     _ => ()
                 }
             }
@@ -77,7 +78,7 @@ impl Core {
 
                         return Some(browse)
                     }
-                    #[cfg(any(feature = "status"))]
+                    #[cfg(any(feature = "status", feature = "transport"))]
                     _ => ()
                 }
             }
@@ -96,7 +97,7 @@ impl Core {
 
                         return Some(status)
                     }
-                    #[cfg(any(feature = "transport"))]
+                    #[cfg(any(feature = "browse", feature = "transport"))]
                     _ => ()
                 }
             }
@@ -300,8 +301,8 @@ impl RoonApi {
             let mut moo_senders: Vec<MooSender> = Vec::new();
             let mut cores: Vec<Core> = Vec::new();
             let mut user_moos: HashMap<usize, Moo> = HashMap::new();
-            let mut props_option: Option<RespProps> = None;
-            let mut response_ids: HashMap<usize, usize> = HashMap::new();
+            let mut props_option: Vec<RespProps> = Vec::new();
+            let mut response_ids: Vec<HashMap<usize, usize>> = Vec::new();
             let mut msg_string: String = String::new();
 
             loop {
@@ -311,25 +312,29 @@ impl RoonApi {
                 if moo_senders.len() == 0 {
                     new_moo = moo_rx.recv().await;
                 } else if response_ids.len() > 0 {
-                    let mut msg_senders = Vec::new();
-                    let mut index: usize = 0;
+                    for index in 0..response_ids.len() {
+                        let resp_ids = &response_ids[index];
+                        let mut msg_senders = Vec::new();
+                        let mut index: usize = 0;
+    
+                        for moo in moo_senders.iter_mut() {
+                            if let Some(request_id) = resp_ids.get(&index) {    
+                                if *request_id == 0 {
+                                    msg_senders.push(moo.send_msg_string(&msg_string).boxed());
+                                } else {
+                                    let (hdr, body) = &props_option[index];
 
-                    for moo in moo_senders.iter_mut() {
-                        if let Some(request_id) = response_ids.get(&index) {
-                            let (hdr, body) = props_option.as_ref().unwrap();
-
-                            if *request_id == 0 {
-                                msg_senders.push(moo.send_msg_string(&msg_string).boxed());
-                            } else {
-                                msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
+                                    msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
+                                }
                             }
+    
+                            index += 1;
                         }
-
-                        index += 1;
+    
+                        join_all(msg_senders).await;
                     }
-
-                    join_all(msg_senders).await;
                     response_ids.clear();
+                    props_option.clear();
                 } else {
                     let mut req_receivers = Vec::new();
 
@@ -354,7 +359,7 @@ impl RoonApi {
                         }
                         (Some(raw_msg), index, _) = select_all(req_receivers) => {
                             msg_string = raw_msg;
-                            response_ids.insert(index, 0);
+                            response_ids.push(HashMap::from([(index, 0)]));
 
                             // Restart loop to sent
                             continue;
@@ -380,8 +385,8 @@ impl RoonApi {
 
                         let req_id = moo.req_id.lock().unwrap().to_owned();
 
-                        props_option = Some((&["REQUEST", "com.roonlabs.registry:1/register"], Some(body.to_owned())));
-                        response_ids.insert(index, req_id);
+                        props_option.push((&["REQUEST", "com.roonlabs.registry:1/register"], Some(body.to_owned())));
+                        response_ids.push(HashMap::from([(index, req_id)]));
                     } else if msg["name"] == "Registered" {
                         let body = &msg["body"];
                         let moo = user_moos.remove(&index).unwrap();
@@ -439,7 +444,7 @@ impl RoonApi {
                                                 let index = moo_senders.iter().position(|moo| moo.id == moo_id);
 
                                                 if let Some(index) = index {
-                                                    response_ids.insert(index, *req_id);
+                                                    response_ids.push(HashMap::from([(index, *req_id)]));
                                                 }
                                             }
                                         }
@@ -448,7 +453,7 @@ impl RoonApi {
                                     provided.insert(svc_name.to_owned(), svc);
 
                                     let body = json!({"paired_core_id": paired_core_id});
-                                    props_option = Some((&["CONTINUE", "Changed"], Some(body)));
+                                    props_option.push((&["CONTINUE", "Changed"], Some(body)));
                                 }
                             }
                         }
@@ -464,25 +469,29 @@ impl RoonApi {
                         let svc = provided.remove(&svc_name);
 
                         if let Some(svc) = svc {
-                            let (hdr, body) = (svc.req_handler)(cores.get(index), Some(&msg));
+                            for resp_props in (svc.req_handler)(cores.get(index), Some(&msg)) {
+                                let (hdr, body) = resp_props;
 
-                            if let Some(_) = hdr.get(2) {
-                                let sub_name = hdr[0];
-                                let sub_types = svc.sub_types.lock().unwrap();
+                                if let Some(_) = hdr.get(2) {
+                                    let sub_name = hdr[0];
+                                    let sub_types = svc.sub_types.lock().unwrap();
+                                    let mut resp_ids = HashMap::new();
 
-                                for (msg_key, req_id) in sub_types.iter() {
-                                    let split: Vec<&str> = msg_key.split(':').collect();
-
-                                    if split[0] == sub_name {
-                                        let index = split[1].parse::<usize>().unwrap();
-                                        response_ids.insert(index, *req_id);
+                                    for (msg_key, req_id) in sub_types.iter() {
+                                        let split: Vec<&str> = msg_key.split(':').collect();
+    
+                                        if split[0] == sub_name {
+                                            let index = split[1].parse::<usize>().unwrap();
+                                            resp_ids.insert(index, *req_id);
+                                        }
                                     }
-                                }
 
-                                props_option = Some((&hdr[1..], body));
-                            } else {
-                                props_option = Some((hdr, body));
-                                response_ids.insert(index, request_id);
+                                    response_ids.push(resp_ids);
+                                    props_option.push((&hdr[1..], body));
+                                } else {
+                                    props_option.push((hdr, body));
+                                    response_ids.push(HashMap::from([(index, request_id)]));
+                                }
                             }
 
                             provided.insert(svc_name, svc);
@@ -490,8 +499,8 @@ impl RoonApi {
                             let error = format!("{}", msg["name"].as_str().unwrap());
                             let body = json!({"error" : error});
 
-                            props_option = Some((&["COMPLETE", "InvalidRequest"], Some(body)));
-                            response_ids.insert(index, request_id);
+                            props_option.push((&["COMPLETE", "InvalidRequest"], Some(body)));
+                            response_ids.push(HashMap::from([(index, request_id)]));
                         }
                     } else {
                         #[cfg(any(feature = "transport", feature = "browse"))]
@@ -550,7 +559,7 @@ impl RoonApi {
         for sub in spec.subs {
             let sub_types_clone = sub_types.clone();
             let sub_name = sub.subscribe_name.clone();
-            let sub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> RespProps {
+            let sub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> Vec<RespProps> {
                 let mut sub_types = sub_types_clone.lock().unwrap();
 
                 if let Some(msg) = msg {
@@ -566,7 +575,7 @@ impl RoonApi {
 
             let sub_types = sub_types.clone();
             let sub_name = sub.subscribe_name.clone();
-            let unsub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> RespProps {
+            let unsub_method = move |core: Option<&Core>, msg: Option<&serde_json::Value>| -> Vec<RespProps> {
                 let mut sub_types = sub_types.lock().unwrap();
 
                 if let Some(msg) = msg {
@@ -580,7 +589,7 @@ impl RoonApi {
                     (end)(core, msg);
                 }
 
-                (&["COMPLETE", "Unsubscribed"], None)
+                vec![(&["COMPLETE", "Unsubscribed"], None)]
             };
 
             sub_names.push(sub.subscribe_name.clone());
@@ -611,7 +620,7 @@ impl RoonApi {
                 }
             }
 
-            (&[], None)
+            vec![(&[], None)]
         };
 
         Svc {
@@ -621,7 +630,7 @@ impl RoonApi {
         }
     }
 
-    fn save_config(key: &str, value: serde_json::Value) -> std::io::Result<()> {
+    pub fn save_config(key: &str, value: serde_json::Value) -> std::io::Result<()> {
         let mut config = match Self::read_and_parse("config.json") {
             Some(config) => config,
             None => json!({})
@@ -632,9 +641,14 @@ impl RoonApi {
         std::fs::write("config.json", serde_json::to_string_pretty(&config).unwrap())
     }
 
-    fn load_config(key: &str) -> serde_json::Value {
+    pub fn load_config(key: &str) -> serde_json::Value {
         match Self::read_and_parse("config.json") {
-            Some(value) => value.get(key).cloned().into(),
+            Some(value) => {
+                match value.get(key) {
+                    Some(value) => value.to_owned(),
+                    None => json!({})
+                }
+            }
             None => json!({})
         }
     }
@@ -653,8 +667,8 @@ impl Ping {
     pub fn new(roon: &RoonApi) -> Svc {
         const SVCNAME: &str = "com.roonlabs.ping:1";
         let mut spec = SvcSpec::new(SVCNAME);
-        let ping = |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
-            (&["COMPLETE", "Success"], None)
+        let ping = |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
+            vec![(&["COMPLETE", "Success"], None)]
         };
     
         spec.add_method("ping", Box::new(ping));
@@ -721,7 +735,7 @@ pub enum Parsed {
 }
 
 #[cfg(test)]
-#[cfg(not(any(feature = "pairing", feature = "status")))]
+#[cfg(not(any(feature = "pairing", feature = "status", feature = "settings")))]
 mod tests {
     use serde_json::json;
 

@@ -19,27 +19,27 @@ impl Status {
         let props = Arc::new(Mutex::new((String::new(), false)));
 
         let props_clone = props.clone();
-        let get_status = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+        let get_status = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             let (message, is_error) = &*props_clone.lock().unwrap();
             let body = json!({
                 "message": message,
                 "is_error": is_error
             });
 
-            (&["COMPLETE", "Success"], Some(body))
+            vec![(&["COMPLETE", "Success"], Some(body))]
         };
 
         spec.add_method("get_status", Box::new(get_status));
 
         let props_clone = props.clone();
-        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> RespProps {
+        let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             let (message, is_error) = &*props_clone.lock().unwrap();
             let body = json!({
                 "message": message,
                 "is_error": is_error
             });
 
-            (&["CONTINUE", "Subscribed"], Some(body))
+            vec![(&["CONTINUE", "Subscribed"], Some(body))]
         };
 
         spec.add_sub(Sub {
