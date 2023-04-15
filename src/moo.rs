@@ -12,6 +12,46 @@ use url::Url;
 
 static MOO_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+#[macro_export]
+macro_rules! send_continue {
+    ($name:literal, $body:expr) => {
+        vec![(&["CONTINUE", $name], $body)]
+    };
+    ($resp_props:ident, $name:literal, $body:expr) => {
+        $resp_props.push((&["CONTINUE", $name], $body))
+    };
+}
+
+#[macro_export]
+macro_rules! send_complete {
+    ($name:literal, $body:expr) => {
+        vec![(&["COMPLETE", $name], $body)]
+    };
+    ($resp_props:ident, $name:literal, $body:expr) => {
+        $resp_props.push((&["COMPLETE", $name], $body))
+    };
+}
+
+#[macro_export]
+macro_rules! send_continue_all {
+    ($sub_type:literal, $name:literal, $body:expr) => {
+        vec![(&[$sub_type, "CONTINUE", $name], $body)]
+    };
+    ($resp_props:ident, $sub_type:literal, $name:literal, $body:expr) => {
+        $resp_props.push((&[$sub_type, "CONTINUE", $name], $body))
+    };
+}
+
+#[macro_export]
+macro_rules! send_complete_all {
+    ($sub_type:literal, $name:literal, $body:expr) => {
+        vec![(&[$sub_type, "COMPLETE", $name], $body)]
+    };
+    ($resp_props:ident, $sub_type:literal, $name:literal, $body:expr) => {
+        $resp_props.push((&[$sub_type, "COMPLETE", $name], $body))
+    };
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LogLevel {
     None,

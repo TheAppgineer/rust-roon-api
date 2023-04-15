@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec};
+use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec, send_complete, send_continue};
 
 pub const SVCNAME: &str = "com.roonlabs.settings:1";
 
@@ -17,7 +17,7 @@ impl Settings {
 
         let get_settings = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             get_settings_cb(|settings| {
-                vec![(&["COMPLETE", "Success"], Some(json!({"settings": settings})))]
+                send_complete!("Success", Some(json!({"settings": settings})))
             })
         };
 
@@ -38,7 +38,7 @@ impl Settings {
 
         let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
             get_settings_cb(|settings| {
-                vec![(&["CONTINUE", "Subscribed"], Some(json!({"settings": settings})))]
+                send_continue!("Subscribed", Some(json!({"settings": settings})))
             })
         };
 
@@ -59,7 +59,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::settings::{self, Settings};
-    use crate::{CoreEvent, ROON_API_VERSION};
+    use crate::{CoreEvent, ROON_API_VERSION, send_continue_all};
 
     use super::*;
 
@@ -97,12 +97,14 @@ mod tests {
         };
         let save_settings = |is_dry_run: bool, settings: serde_json::Value| -> Vec<RespProps> {
             let layout = make_layout(&settings["values"]);
-            let mut resp_props: Vec<RespProps> = vec![(&["COMPLETE", "Success"], Some(json!({"settings": layout})))];
+            let mut resp_props: Vec<RespProps> = Vec::new();
+
+            send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
 
             if !is_dry_run && !layout["has_error"].as_bool().unwrap() {
                 RoonApi::save_config("settings", layout["values"].to_owned()).unwrap();
 
-                resp_props.push((&["subscribe_settings", "CONTINUE", "Changed"], Some(json!({"settings": layout}))));
+                send_continue_all!(resp_props, "subscribe_settings", "Changed", Some(json!({"settings": layout})));
             }
 
             resp_props

@@ -324,7 +324,7 @@ impl RoonApi {
                                 } else {
                                     let (hdr, body) = &props_option[index];
 
-                                    msg_senders.push(moo.send_msg(*request_id, hdr, body.as_ref()).boxed());
+                                    msg_senders.push(moo.send_msg(*request_id, *hdr, body.as_ref()).boxed());
                                 }
                             }
     
@@ -453,7 +453,7 @@ impl RoonApi {
                                     provided.insert(svc_name.to_owned(), svc);
 
                                     let body = json!({"paired_core_id": paired_core_id});
-                                    props_option.push((&["CONTINUE", "Changed"], Some(body)));
+                                    send_continue!(props_option, "Changed", Some(body));
                                 }
                             }
                         }
@@ -499,7 +499,7 @@ impl RoonApi {
                             let error = format!("{}", msg["name"].as_str().unwrap());
                             let body = json!({"error" : error});
 
-                            props_option.push((&["COMPLETE", "InvalidRequest"], Some(body)));
+                            send_complete!(props_option, "InvalidRequest", Some(body));
                             response_ids.push(HashMap::from([(index, request_id)]));
                         }
                     } else {
@@ -589,7 +589,7 @@ impl RoonApi {
                     (end)(core, msg);
                 }
 
-                vec![(&["COMPLETE", "Unsubscribed"], None)]
+                send_complete!("Unsubscribed", None)
             };
 
             sub_names.push(sub.subscribe_name.clone());
@@ -668,7 +668,7 @@ impl Ping {
         const SVCNAME: &str = "com.roonlabs.ping:1";
         let mut spec = SvcSpec::new(SVCNAME);
         let ping = |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
-            vec![(&["COMPLETE", "Success"], None)]
+            send_complete!("Success", None)
         };
     
         spec.add_method("ping", Box::new(ping));

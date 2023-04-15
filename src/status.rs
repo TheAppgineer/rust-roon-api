@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use serde_json::json;
 
-use crate::{RoonApi, Core, Moo, RespProps, Sub, Svc, SvcSpec};
+use crate::{RoonApi, Core, Moo, RespProps, Sub, Svc, SvcSpec, send_complete, send_continue};
 
 pub const SVCNAME: &str = "com.roonlabs.status:1";
 
@@ -26,7 +26,7 @@ impl Status {
                 "is_error": is_error
             });
 
-            vec![(&["COMPLETE", "Success"], Some(body))]
+            send_complete!("Success", Some(body))
         };
 
         spec.add_method("get_status", Box::new(get_status));
@@ -39,7 +39,7 @@ impl Status {
                 "is_error": is_error
             });
 
-            vec![(&["CONTINUE", "Subscribed"], Some(body))]
+            send_continue!("Subscribed", Some(body))
         };
 
         spec.add_sub(Sub {

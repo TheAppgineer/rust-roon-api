@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec};
+use crate::{RoonApi, Core, RespProps, Sub, Svc, SvcSpec, send_complete, send_continue, send_continue_all};
 
 pub const SVCNAME: &str = "com.roonlabs.pairing:1";
 
@@ -15,10 +15,10 @@ impl Pairing {
                 Some(paired_core) => {
                     let body = json!({"paired_core_id": paired_core.id});
 
-                    vec![(&["COMPLETE", "Success"], Some(body))]
+                    send_complete!("Success", Some(body))
                 }
                 None => {
-                    vec![(&["COMPLETE", "Success"], None)]
+                    send_complete!("Success", None)
                 }
             }
         };
@@ -47,7 +47,7 @@ impl Pairing {
 
                 let body = json!({"paired_core_id": core.id});
 
-                vec![(&["subscribe_pairing", "CONTINUE", "Changed"], Some(body))]
+                send_continue_all!("subscribe_pairing", "Changed", Some(body))
             } else {
                 vec![(&[], None)]
             }
@@ -61,12 +61,12 @@ impl Pairing {
                 Some(paired_core) => {
                     let body = json!({"paired_core_id": paired_core.id});
 
-                    vec![(&["CONTINUE", "Subscribed"], Some(body))]
+                    send_continue!("Subscribed", Some(body))
                 }
                 None => {
                     let body = json!({"paired_core_id": "undefined"});
 
-                    vec![(&["CONTINUE", "Subscribed"], Some(body))]
+                    send_continue!("Subscribed", Some(body))
                 }
             }
         };
