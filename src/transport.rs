@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -62,7 +62,7 @@ pub struct SourceControls {
     pub status: String
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Settings {
     #[serde(rename = "loop")] pub repeat: String,
     pub shuffle: bool,
@@ -128,12 +128,143 @@ impl Transport {
         self.moo = Some(moo);
     }
 
-    pub async fn get_zones(&self) -> Option<usize> {
-        if let Some(moo) = &self.moo {
-            moo.send_req(SVCNAME.to_owned() + "/get_zones", None).await.ok()
-        } else {
-            None
+    pub async fn mute_all(&self, how: &str) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "how": how
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/mute_all", Some(body)).await.ok()
+    }
+
+    pub async fn pause_all(&self) -> Option<usize> {
+        self.moo.as_ref()?.send_req(SVCNAME.to_owned() + "/pause_all", None).await.ok()
+    }
+
+    pub async fn standby(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let mut body = json!({
+            "output_id": output_id
+        });
+
+        if let Some(control_key) = control_key {
+            body["control_key"] = control_key.into();
         }
+
+        moo.send_req(SVCNAME.to_owned() + "/standby", Some(body)).await.ok()
+    }
+
+    pub async fn toggle_standby(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let mut body = json!({
+            "output_id": output_id
+        });
+
+        if let Some(control_key) = control_key {
+            body["control_key"] = control_key.into();
+        }
+
+        moo.send_req(SVCNAME.to_owned() + "/toggle_standby", Some(body)).await.ok()
+    }
+
+    pub async fn convenience_switch(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let mut body = json!({
+            "output_id": output_id
+        });
+
+        if let Some(control_key) = control_key {
+            body["control_key"] = control_key.into();
+        }
+
+        moo.send_req(SVCNAME.to_owned() + "/convenience_switch", Some(body)).await.ok()
+    }
+
+    pub async fn mute(&self, output_id: &str, how: &str) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "output_id": output_id,
+            "how": how
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/mute", Some(body)).await.ok()
+    }
+
+    pub async fn change_volume(&self, output_id: &str, how: &str, value: i32) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "output_id": output_id,
+            "how": how,
+            "value": value
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/change_volume", Some(body)).await.ok()
+    }
+
+    pub async fn seek(&self, zone_or_output_id: &str, how: &str, seconds: i32) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "zone_or_output_id": zone_or_output_id,
+            "how": how,
+            "seconds": seconds
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/seek", Some(body)).await.ok()
+    }
+
+    pub async fn control(&self, zone_or_output_id: &str, control: &str) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "zone_or_output_id": zone_or_output_id,
+            "control": control
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/control", Some(body)).await.ok()
+    }
+
+    pub async fn transfer_zone(&self, from_zone_or_output_id: &str, to_zone_or_output_id: &str) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "from_zone_or_output_id": from_zone_or_output_id,
+            "to_zone_or_output_id": to_zone_or_output_id
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/transfer_zone", Some(body)).await.ok()
+    }
+
+    pub async fn group_outputs(&self, output_ids: Vec<&str>) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "output_ids": output_ids
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/group_outputs", Some(body)).await.ok()
+    }
+
+    pub async fn ungroup_outputs(&self, output_ids: Vec<&str>) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "output_ids": output_ids
+        });
+
+        moo.send_req(SVCNAME.to_owned() + "/ungroup_outputs", Some(body)).await.ok()
+    }
+
+    pub async fn change_settings(&self, zone_or_output_id: &str, settings: Settings) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let mut body = settings.serialize(serde_json::value::Serializer).ok()?;
+
+        body["zone_or_output_id"] = zone_or_output_id.into();
+
+        moo.send_req(SVCNAME.to_owned() + "/change_settings", Some(body)).await.ok()
+    }
+
+    pub async fn get_zones(&self) -> Option<usize> {
+        self.moo.as_ref()?.send_req(SVCNAME.to_owned() + "/get_zones", None).await.ok()
+    }
+
+    pub async fn get_outputs(&self) -> Option<usize> {
+        self.moo.as_ref()?.send_req(SVCNAME.to_owned() + "/get_outputs", None).await.ok()
     }
 
     pub async fn subscribe_zones(&mut self) {
@@ -200,17 +331,14 @@ impl Transport {
         }
     }
 
-    pub async fn control(&self, zone_or_output_id: &str, control: &str) -> Option<usize> {
-        if let Some(moo) = &self.moo {
-            let body = json!({
-                "zone_or_output_id": zone_or_output_id,
-                "control": control
-            });
+    pub async fn play_from_here(&self, zone_or_output_id: &str, queue_item_id: &str) -> Option<usize> {
+        let moo = self.moo.as_ref()?;
+        let body = json!({
+            "zone_or_output_id": zone_or_output_id,
+            "queue_item_id": queue_item_id
+        });
 
-            moo.send_req(SVCNAME.to_owned() + "/control", Some(body)).await.ok()
-        } else {
-            None
-        }
+        moo.send_req(SVCNAME.to_owned() + "/play_from_here", Some(body)).await.ok()
     }
 
     pub async fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
@@ -358,7 +486,18 @@ mod tests {
 
                     if let Some((_, parsed)) = msg {
                         match parsed {
-                            Parsed::Zones(_zones) => (),
+                            Parsed::Zones(zones) => {
+                                for zone in zones {
+                                    if zone.settings.auto_radio {
+                                        if let Some(transport) = transport.as_mut() {
+                                            let mut settings = zone.settings;
+
+                                            settings.auto_radio = false;
+                                            transport.change_settings(&zone.zone_id, settings).await;
+                                        }
+                                    }
+                                }
+                            }
                             Parsed::ZonesSeek(_zones_seek) => (),
                             Parsed::ZonesRemoved(_zones_removed) => {
                                 if let Some(transport) = transport.as_mut() {
