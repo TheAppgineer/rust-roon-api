@@ -85,10 +85,10 @@ impl Status {
                 }
             }
 
-            if let Some(request_id) = response_ids.get(&moo.id) {
-                let msg_string = Moo::create_msg_string(*request_id, &hdr, Some(&body));
+            if let Some(req_id) = response_ids.get(&moo.id) {
+                let msg_string = Moo::create_msg_string(*req_id, &hdr, Some(&body));
 
-                result = moo.send_msg_string(msg_string).await.ok();
+                result = moo.send_msg_string(*req_id, msg_string).await.ok();
             }
         }
 

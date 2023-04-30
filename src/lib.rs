@@ -20,7 +20,7 @@ mod sood;
 
 pub const ROON_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-type RespProps = (&'static[&'static str], Option<serde_json::Value>);
+pub type RespProps = (&'static[&'static str], Option<serde_json::Value>);
 type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> Vec<RespProps> + Send>;
 
 pub struct RoonApi {
@@ -133,7 +133,7 @@ impl RoonApi {
     pub async fn start_discovery(
         &mut self,
         mut provided: HashMap<String, Svc>,
-        #[cfg(all(feature = "status", not(any(feature = "transport", feature = "browse"))))] services: Option<Vec<Services>>,
+        #[cfg(all(any(feature = "status", feature = "settings"), not(any(feature = "transport", feature = "browse"))))] services: Option<Vec<Services>>,
         #[cfg(any(feature = "transport", feature = "browse"))] mut services: Option<Vec<Services>>,
     ) -> std::io::Result<(Vec<JoinHandle<()>>, Receiver<(CoreEvent, Option<(serde_json::Value, Parsed)>)>)> {
         const SERVICE_ID: &str = "00720724-5143-4a9b-abac-0e50cba674bb";
@@ -303,7 +303,7 @@ impl RoonApi {
             let mut user_moos: HashMap<usize, Moo> = HashMap::new();
             let mut props_option: Vec<RespProps> = Vec::new();
             let mut response_ids: Vec<HashMap<usize, usize>> = Vec::new();
-            let mut msg_string: String = String::new();
+            let mut msg_string: Option<String> = None;
 
             loop {
                 let mut new_moo = None;
@@ -312,19 +312,18 @@ impl RoonApi {
                 if moo_senders.len() == 0 {
                     new_moo = moo_rx.recv().await;
                 } else if response_ids.len() > 0 {
-                    for index in 0..response_ids.len() {
-                        let resp_ids = &response_ids[index];
+                    for resp_ids in &response_ids {
                         let mut msg_senders = Vec::new();
                         let mut index: usize = 0;
     
                         for moo in moo_senders.iter_mut() {
-                            if let Some(request_id) = resp_ids.get(&index) {    
-                                if *request_id == 0 {
-                                    msg_senders.push(moo.send_msg_string(&msg_string).boxed());
+                            if let Some(req_id) = resp_ids.get(&index) {
+                                if let Some(msg_string) = &msg_string {
+                                    msg_senders.push(moo.send_msg_string(msg_string).boxed());
                                 } else {
                                     let (hdr, body) = &props_option[index];
 
-                                    msg_senders.push(moo.send_msg(*request_id, *hdr, body.as_ref()).boxed());
+                                    msg_senders.push(moo.send_msg(*req_id, *hdr, body.as_ref()).boxed());
                                 }
                             }
     
@@ -332,9 +331,34 @@ impl RoonApi {
                         }
     
                         join_all(msg_senders).await;
+
+                        #[cfg(any(feature = "settings"))]
+                        if let Some(svcs) = services.as_ref() {
+                            for svc in svcs {
+                                match svc {
+                                    Services::Settings(settings) => {
+                                        for (_, req_id) in resp_ids {
+                                            let parsed = settings.parse_msg(req_id);
+
+                                            match parsed {
+                                                Parsed::None => (),
+                                                _ => {
+                                                    core_tx.send((CoreEvent::None, Some((json!({}), parsed)))).await.unwrap();
+                                                }
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    #[cfg(any(feature = "status", feature = "browse", feature = "transport"))]
+                                    _ => ()
+                                }
+                            }
+                        }
                     }
+
                     response_ids.clear();
                     props_option.clear();
+                    msg_string = None;
                 } else {
                     let mut req_receivers = Vec::new();
 
@@ -357,9 +381,9 @@ impl RoonApi {
                         moo = moo_rx.recv() => {
                             new_moo = moo;
                         }
-                        (Some(raw_msg), index, _) = select_all(req_receivers) => {
-                            msg_string = raw_msg;
-                            response_ids.push(HashMap::from([(index, 0)]));
+                        (Some((req_id, raw_msg)), index, _) = select_all(req_receivers) => {
+                            msg_string = Some(raw_msg);
+                            response_ids.push(HashMap::from([(index, req_id)]));
 
                             // Restart loop to sent
                             continue;
@@ -717,6 +741,7 @@ pub struct Svc {
 #[derive(Clone, Debug)]
 pub enum Services {
     #[cfg(feature = "status")]    Status(status::Status),
+    #[cfg(feature = "settings")]  Settings(settings::Settings),
     #[cfg(feature = "transport")] Transport(transport::Transport),
     #[cfg(feature = "browse")]    Browse(browse::Browse),
 }
@@ -724,6 +749,7 @@ pub enum Services {
 #[derive(Debug)]
 pub enum Parsed {
     None,
+    #[cfg(feature = "settings")]  SettingsSaved,
     #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
     #[cfg(feature = "transport")] ZonesSeek(Vec<transport::ZoneSeek>),
     #[cfg(feature = "transport")] ZonesRemoved(Vec<String>),

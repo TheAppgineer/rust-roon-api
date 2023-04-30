@@ -63,7 +63,7 @@ pub enum LogLevel {
 pub struct Moo {
     pub id: usize,
     pub req_id: Arc<Mutex<usize>>,
-    msg_tx: Sender<String>,
+    msg_tx: Sender<(usize, String)>,
     sub_key: Arc<Mutex<usize>>,
     log_level: Arc<LogLevel>,
 }
@@ -72,7 +72,7 @@ pub struct Moo {
 pub struct MooSender {
     pub id: usize,
     pub req_id: Arc<Mutex<usize>>,
-    pub msg_rx: Receiver<String>,
+    pub msg_rx: Receiver<(usize, String)>,
     write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     log_level: Arc<LogLevel>,
     quiet_reqs: Arc<Mutex<Vec<usize>>>
@@ -94,7 +94,7 @@ impl Moo {
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
-        let (msg_tx, msg_rx) = mpsc::channel::<String>(4);
+        let (msg_tx, msg_rx) = mpsc::channel::<(usize, String)>(4);
 
         let req_id_clone = req_id.clone();
         let moo = Moo {
@@ -124,11 +124,11 @@ impl Moo {
         Ok((moo, sender, receiver))
     }
 
-    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) -> Result<usize, SendError<String>> {
+    pub async fn send_req(&self, name: String, body: Option<serde_json::Value>) -> Result<usize, SendError<(usize, String)>> {
         let req_id = self.req_id.lock().unwrap().to_owned();
         let (msg_string, log_string) = Moo::create_msg_string(req_id, &["REQUEST", &name], body.as_ref());
 
-        self.msg_tx.send(msg_string).await?;
+        self.msg_tx.send((req_id, msg_string)).await?;
 
         if *self.log_level != LogLevel::None {
             println!("{}", log_string);
@@ -140,7 +140,7 @@ impl Moo {
         Ok(req_id)
     }
 
-    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<(usize, usize), SendError<String>> {
+    pub async fn send_sub_req(&self, svc_name: &str, req_name: &str, args: Option<serde_json::Value>) -> Result<(usize, usize), SendError<(usize, String)>> {
         let body;
 
         let mut sub_key = *self.sub_key.lock().unwrap();
@@ -161,15 +161,15 @@ impl Moo {
         }
     }
 
-    pub async fn send_unsub_req(&self, svc_name: &str, req_name: &str, sub_key: usize) -> Result<usize, SendError<String>> {
+    pub async fn send_unsub_req(&self, svc_name: &str, req_name: &str, sub_key: usize) -> Result<usize, SendError<(usize, String)>> {
         let name = format!("{}/unsubscribe_{}", svc_name, req_name);
         let body = Some(json!({"subscription_key": sub_key}));
 
         self.send_req(name, body).await
     }
 
-    pub async fn send_msg_string(&self, msg_string: (String, String)) -> Result<(), SendError<String>> {
-        self.msg_tx.send(msg_string.0).await?;
+    pub async fn send_msg_string(&self, req_id: usize, msg_string: (String, String)) -> Result<(), SendError<(usize, String)>> {
+        self.msg_tx.send((req_id, msg_string.0)).await?;
 
         if *self.log_level != LogLevel::None {
             println!("{}", msg_string.1);
