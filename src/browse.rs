@@ -86,18 +86,14 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{RoonApi, CoreEvent, Svc, Services, ROON_API_VERSION};
+    use crate::{RoonApi, CoreEvent, Info, Svc, Services, LogLevel};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = json!({
-            "extension_id": "com.theappgineer.rust-roon-api",
-            "display_name": "Rust Roon API",
-            "display_version": ROON_API_VERSION,
-            "publisher": "The Appgineer",
-            "email": "theappgineer@gmail.com",
-            "log_level": "none"
-        });
+        let mut info = Info::new("com.theappgineer", "Rust Roon API", "");
+
+        info.set_log_level(LogLevel::None);
+
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Browse(Browse::new())];
         let provided: HashMap<String, Svc> = HashMap::new();

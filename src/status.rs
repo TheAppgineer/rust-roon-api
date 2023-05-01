@@ -104,22 +104,15 @@ impl Status {
 #[cfg(feature = "status")]
 mod tests {
     use std::collections::HashMap;
-    use serde_json::json;
 
     use crate::status::{self, Status};
-    use crate::{CoreEvent, Services, ROON_API_VERSION};
+    use crate::{CoreEvent, Info, Services};
 
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = json!({
-            "extension_id": "com.theappgineer.rust-roon-api",
-            "display_name": "Rust Roon API",
-            "display_version": ROON_API_VERSION,
-            "publisher": "The Appgineer",
-            "email": "theappgineer@gmail.com"
-        });
+        let info = Info::new("com.theappgineer", "Rust Roon API", "");
         let mut roon = RoonApi::new(info);
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];

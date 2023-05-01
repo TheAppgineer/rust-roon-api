@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use futures_util::{FutureExt, future::{join_all, select_all, select, Either}};
-use moo::{Moo, MooReceiver, MooSender, LogLevel};
+use moo::{Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
+use serde::Serialize;
 use serde_json::json;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver};
@@ -11,6 +12,8 @@ use tokio::time::{sleep, Duration};
 
 pub mod moo;
 mod sood;
+
+pub use moo::LogLevel;
 
 #[cfg(feature = "status")]    pub mod status;
 #[cfg(feature = "settings")]  pub mod settings;
@@ -108,15 +111,8 @@ impl Core {
 }
 
 impl RoonApi {
-    pub fn new(options: serde_json::Value) -> Self {
-        let log_level = if options["log_level"] == "all" {
-            LogLevel::All
-        } else if options["log_level"] == "none" {
-            LogLevel::None
-        } else {
-            LogLevel::Default
-        };
-        let mut reg_info = options;
+    pub fn new(info: Info) -> Self {
+        let mut reg_info = info.serialize(serde_json::value::Serializer).unwrap();
 
         reg_info["provided_services"] = json!([]);
         reg_info["required_services"] = json!([]);
@@ -124,7 +120,7 @@ impl RoonApi {
         Self {
             reg_info,
             lost_core_id: Arc::new(Mutex::new(None)),
-            log_level: Arc::new(log_level),
+            log_level: Arc::new(info.log_level),
             #[cfg(feature = "pairing")]
             paired_core: Arc::new(Mutex::new(None))
         }
@@ -760,23 +756,62 @@ pub enum Parsed {
     #[cfg(feature = "browse")]    Items(Vec<browse::Item>),
 }
 
+#[derive(Serialize)]
+pub struct Info {
+    extension_id: String,
+    display_name: &'static str,
+    display_version: &'static str,
+    publisher: Option<&'static str>,
+    email: &'static str,
+    website: Option<&'static str>,
+    log_level: LogLevel
+}
+
+impl Info {
+    pub fn new(extension_id_prefix: &'static str, display_name: &'static str, email: &'static str) -> Self {
+        let mut extension_id = String::from(extension_id_prefix);
+        let authors = env!("CARGO_PKG_AUTHORS");
+        let home_page = env!("CARGO_PKG_HOMEPAGE");
+        let repository = env!("CARGO_PKG_REPOSITORY");
+        let publisher = if authors.len() > 0 { authors.split(':').next() } else { None };
+        let website = if home_page.len() > 0 {
+            Some(home_page)
+        } else if repository.len() > 0 {
+            Some(repository)
+        } else {
+            None
+        };
+
+        extension_id.push('.');
+        extension_id.push_str(env!("CARGO_PKG_NAME"));
+
+        Self {
+            extension_id,
+            display_name,
+            display_version: env!("CARGO_PKG_VERSION"),
+            publisher,
+            email,
+            website,
+            log_level: LogLevel::Default
+        }
+    }
+
+    pub fn set_log_level(&mut self, log_level: LogLevel) {
+        self.log_level = log_level;
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(any(feature = "pairing", feature = "status", feature = "settings")))]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = json!({
-            "extension_id": "com.theappgineer.rust-roon-api",
-            "display_name": "Rust Roon API",
-            "display_version": ROON_API_VERSION,
-            "publisher": "The Appgineer",
-            "email": "theappgineer@gmail.com",
-            "log_level": "all"
-        });
+        let mut info = Info::new("com.theappgineer", "Rust Roon API", "");
+
+        info.set_log_level(LogLevel::All);
+
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
         let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();

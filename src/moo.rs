@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use futures_util::stream::{StreamExt, SplitSink, SplitStream};
 use futures_util::SinkExt;
 use regex::Regex;
+use serde::Serialize;
 use serde_json::json;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender, error::SendError};
@@ -52,7 +53,8 @@ macro_rules! send_complete_all {
     };
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LogLevel {
     None,
     Default,

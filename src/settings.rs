@@ -53,12 +53,12 @@ pub struct Textbox {
 }
 
 #[derive(Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Widget {
-    #[serde(rename = "dropdown")] Dropdown(Dropdown),
-    #[serde(rename = "group")] Group(Group),
-    #[serde(rename = "integer")] Integer(Integer),
-    #[serde(rename = "label")] Label(Label),
+    Dropdown(Dropdown),
+    Group(Group),
+    Integer(Integer),
+    Label(Label),
     #[serde(rename = "zone")] OutputDropdown(OutputDropdown),
     #[serde(rename = "string")] Textbox(Textbox)
 }
@@ -147,7 +147,7 @@ impl Settings {
 #[cfg(test)]
 #[cfg(feature = "settings")]
 mod tests {
-    use crate::{settings, CoreEvent, Services, ROON_API_VERSION, send_continue_all};
+    use crate::{settings, CoreEvent, Info, Services, send_continue_all};
 
     use super::*;
 
@@ -177,13 +177,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = json!({
-            "extension_id": "com.theappgineer.rust-roon-api",
-            "display_name": "Rust Roon API",
-            "display_version": ROON_API_VERSION,
-            "publisher": "The Appgineer",
-            "email": "theappgineer@gmail.com"
-        });
+        let info = Info::new("com.theappgineer", "Rust Roon API", "");
         let mut roon = RoonApi::new(info);
         let get_settings = |cb: fn(serde_json::Value) -> Vec<RespProps>| -> Vec<RespProps> {
             let settings = RoonApi::load_config("settings");
