@@ -147,7 +147,7 @@ impl Settings {
 #[cfg(test)]
 #[cfg(feature = "settings")]
 mod tests {
-    use crate::{settings, CoreEvent, Info, Services, send_continue_all};
+    use crate::{settings, CoreEvent, Info, Services, info, send_continue_all};
 
     use super::*;
 
@@ -177,7 +177,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = Info::new("com.theappgineer", "Rust Roon API", "");
+        let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let get_settings = |cb: fn(serde_json::Value) -> Vec<RespProps>| -> Vec<RespProps> {
             let settings = RoonApi::load_config("settings");

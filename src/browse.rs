@@ -86,11 +86,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{RoonApi, CoreEvent, Info, Svc, Services, LogLevel};
+    use crate::{RoonApi, CoreEvent, Info, LogLevel, Svc, Services, info};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let mut info = Info::new("com.theappgineer", "Rust Roon API", "");
+        let mut info = info!("com.theappgineer", "Rust Roon API");
 
         info.set_log_level(LogLevel::None);
 

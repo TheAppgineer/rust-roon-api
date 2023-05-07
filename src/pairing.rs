@@ -88,11 +88,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{CoreEvent, Info};
+    use crate::{CoreEvent, Info, info};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = Info::new("com.theappgineer", "Rust Roon API", "");
+        let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
         let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();

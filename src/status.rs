@@ -106,13 +106,13 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::status::{self, Status};
-    use crate::{CoreEvent, Info, Services};
+    use crate::{CoreEvent, Info, Services, info};
 
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = Info::new("com.theappgineer", "Rust Roon API", "");
+        let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];

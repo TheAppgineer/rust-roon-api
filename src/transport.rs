@@ -444,11 +444,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{RoonApi, CoreEvent, Info, Svc, Services};
+    use crate::{RoonApi, CoreEvent, Info, Svc, Services, info};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let info = Info::new("com.theappgineer", "Rust Roon API", "");
+        let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Transport(Transport::new())];
         let provided: HashMap<String, Svc> = HashMap::new();
@@ -466,7 +466,7 @@ mod tests {
                             transport = if let Some(transport) = core.get_transport() {
                                 transport.subscribe_zones().await;
                                 transport.subscribe_outputs().await;
-    
+
                                 Some(transport.clone())
                             } else {
                                 None

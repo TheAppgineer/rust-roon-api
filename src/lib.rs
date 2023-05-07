@@ -767,28 +767,67 @@ pub struct Info {
     log_level: LogLevel
 }
 
+#[macro_export]
+macro_rules! info {
+    ($extension_id_prefix:literal, $display_name:literal) => {
+        {
+            let name = env!("CARGO_PKG_NAME");
+            let authors = env!("CARGO_PKG_AUTHORS");
+            let homepage = env!("CARGO_PKG_HOMEPAGE");
+            let repository = env!("CARGO_PKG_REPOSITORY");
+            let version = env!("CARGO_PKG_VERSION");
+
+            let (publisher, email) = if authors.len() > 0 {
+                let author_option = authors.split(':').next();
+
+                if let Some(author) = author_option {
+                    let start = author.find('<');
+
+                    if let Some(start) = start {
+                        let end = author.find('>').unwrap();
+
+                        (Some(author[0..start].trim()), &author[start+1..end])
+                    } else {
+                        (author_option, "")
+                    }
+                } else {
+                    (author_option, "")
+                }
+            } else {
+                (None, "")
+            };
+
+            let website = if homepage.len() > 0 {
+                Some(homepage)
+            } else if repository.len() > 0 {
+                Some(repository)
+            } else {
+                None
+            };
+
+            let mut extension_id = String::from($extension_id_prefix);
+
+            extension_id.push('.');
+            extension_id.push_str(name);
+
+            Info::new(extension_id, $display_name, version, publisher, email, website)
+        }
+    };
+}
+
 impl Info {
-    pub fn new(extension_id_prefix: &'static str, display_name: &'static str, email: &'static str) -> Self {
-        let mut extension_id = String::from(extension_id_prefix);
-        let authors = env!("CARGO_PKG_AUTHORS");
-        let home_page = env!("CARGO_PKG_HOMEPAGE");
-        let repository = env!("CARGO_PKG_REPOSITORY");
-        let publisher = if authors.len() > 0 { authors.split(':').next() } else { None };
-        let website = if home_page.len() > 0 {
-            Some(home_page)
-        } else if repository.len() > 0 {
-            Some(repository)
-        } else {
-            None
-        };
-
-        extension_id.push('.');
-        extension_id.push_str(env!("CARGO_PKG_NAME"));
-
+    pub fn new(
+        extension_id: String,
+        display_name: &'static str,
+        display_version: &'static str,
+        publisher: Option<&'static str>,
+        email: &'static str,
+        website: Option<&'static str>
+    ) -> Self {
         Self {
             extension_id,
             display_name,
-            display_version: env!("CARGO_PKG_VERSION"),
+            display_version,
             publisher,
             email,
             website,
@@ -808,7 +847,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
-        let mut info = Info::new("com.theappgineer", "Rust Roon API", "");
+        let mut info = info!("com.theappgineer", "Rust Roon API");
 
         info.set_log_level(LogLevel::All);
 
