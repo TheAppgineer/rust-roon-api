@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{RoonApi, Core, Parsed, RespProps, Sub, Svc, SvcSpec, send_complete, send_continue};
@@ -34,7 +34,7 @@ pub struct Integer {
 
 #[derive(Serialize)]
 pub struct Label {
-    pub title: &'static str,
+    pub title: String,
     pub subtitle: Option<String>
 }
 
@@ -63,17 +63,35 @@ pub enum Widget {
     #[serde(rename = "string")] Textbox(Textbox)
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct OutputSetting {
+    pub name: String,
+    pub output_id: String
+}
+
+#[derive(Serialize)]
+pub struct Layout<T>
+where T: serde::ser::Serialize
+{
+    #[serde(rename = "values")] pub settings: T,
+    #[serde(rename = "layout")] pub widgets: Vec<Widget>,
+    pub has_error: bool
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     save_req_id: Arc<Mutex<Option<usize>>>
 }
 
 impl Settings {
-    pub fn new(
+    pub fn new<T, U>(
         roon: &RoonApi,
-        get_settings_cb: Box<dyn Fn(fn(serde_json::Value) -> Vec<RespProps>) -> Vec<RespProps> + Send>,
-        save_settings_cb: Box<dyn Fn(bool, serde_json::Value) -> Vec<RespProps> + Send>
-    ) -> (Svc, Self) {
+        get_settings_cb: Box<dyn Fn(fn(Layout<T>) -> Vec<RespProps>) -> Vec<RespProps> + Send>,
+        save_settings_cb: Box<dyn Fn(bool, U) -> Vec<RespProps> + Send>
+    ) -> (Svc, Self)
+    where T: serde::ser::Serialize + 'static,
+          U: serde::de::DeserializeOwned + 'static
+    {
         let mut spec = SvcSpec::new(SVCNAME);
         let save_req_id = Arc::new(Mutex::new(None));
         let get_settings_cb = Arc::new(Mutex::new(get_settings_cb));
@@ -100,7 +118,7 @@ impl Settings {
                     *save_req_id = Some(req["request_id"].as_str().unwrap().parse::<usize>().unwrap());
                 }
 
-                save_settings_cb(is_dry_run, settings.to_owned())
+                save_settings_cb(is_dry_run, serde_json::from_value::<U>(settings["values"].to_owned()).unwrap())
             } else {
                 vec![(&[], None)]
             }
@@ -151,8 +169,13 @@ mod tests {
 
     use super::*;
 
-    fn make_layout(settings: &serde_json::Value) -> serde_json::Value {
-        let is_error = false;
+    #[derive(Default, Deserialize, Serialize)]
+    struct MySettings {
+        state: bool
+    }
+
+    fn make_layout(settings: MySettings) -> Layout<MySettings> {
+        let has_error = false;
         let mut widgets = Vec::new();
         let mut values = Vec::new();
 
@@ -163,31 +186,40 @@ mod tests {
             title: "Dropdown",
             subtitle: None,
             values,
-            setting: "dropdown"
+            setting: "state"
         });
 
         widgets.push(dropdown);
 
-        json!({
-            "values": settings,
-            "layout": widgets.serialize(serde_json::value::Serializer).unwrap(),
-            "has_error": is_error
-        })
+        Layout {
+            settings,
+            widgets,
+            has_error
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
-        let get_settings = |cb: fn(serde_json::Value) -> Vec<RespProps>| -> Vec<RespProps> {
+        let get_settings = |cb: fn(Layout<MySettings>) -> Vec<RespProps>| -> Vec<RespProps> {
             let settings = RoonApi::load_config("settings");
-            let layout = make_layout(&settings);
+            let settings = if let Ok(settings) = serde_json::from_value::<MySettings>(settings) {
+                settings
+            } else {
+                MySettings {
+                    ..Default::default()
+                }
+            };
+            let layout = make_layout(settings);
 
             cb(layout)
         };
-        let save_settings = |is_dry_run: bool, settings: serde_json::Value| -> Vec<RespProps> {
-            let layout = make_layout(&settings["values"]);
+        let save_settings = |is_dry_run: bool, settings: MySettings| -> Vec<RespProps> {
             let mut resp_props: Vec<RespProps> = Vec::new();
+
+            let layout = make_layout(settings);
+            let layout = layout.serialize(serde_json::value::Serializer).unwrap();
 
             send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
 
