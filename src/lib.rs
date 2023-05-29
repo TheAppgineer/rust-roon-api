@@ -524,8 +524,16 @@ impl RoonApi {
                                 match svc {
                                     #[cfg(feature = "transport")]
                                     Services::Transport(transport) => {
-                                        let parsed = transport.parse_msg(&msg).await;
-                                        core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
+                                        let mut parsed = transport.parse_msg(&msg).await;
+
+                                        while parsed.len() > 1 {
+                                            let item = parsed.pop().unwrap();
+
+                                            core_tx.send((CoreEvent::None, Some((serde_json::Value::Null, item)))).await.unwrap();
+                                        }
+
+                                        core_tx.send((CoreEvent::None, Some((msg, parsed.pop().unwrap())))).await.unwrap();
+
                                         break;
                                     }
                                     #[cfg(feature = "browse")]

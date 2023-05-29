@@ -341,100 +341,97 @@ impl Transport {
         moo.send_req(SVCNAME.to_owned() + "/play_from_here", Some(body)).await.ok()
     }
 
-    pub async fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
+    pub async fn parse_msg(&self, msg: &serde_json::Value) -> Vec<Parsed> {
         let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
         let response = msg["name"].as_str().unwrap();
         let body = msg["body"].to_owned();
+        let mut parsed = Vec::new();
 
         if let Some((zone_req_id, _)) = *self.zone_sub.lock().await {
             if req_id == zone_req_id {
-                let mut zones: Option<Vec<Zone>> = None;
-
                 if response == "Changed" {
                     if body["zones_changed"].is_array() {
-                        zones = serde_json::from_value(body["zones_changed"].to_owned()).ok();
-                    } else if body["zones_added"].is_array() {
-                        zones = serde_json::from_value(body["zones_added"].to_owned()).ok();
-                    } else if body["zones_seek_changed"].is_array() {
-                        let zones_seek: Option<Vec<ZoneSeek>> = serde_json::from_value(body["zones_seek_changed"].to_owned()).ok();
-
-                        return match zones_seek {
-                            Some(zones_seek) => Parsed::ZonesSeek(zones_seek),
-                            None => Parsed::None
+                        if let Ok(zones) = serde_json::from_value(body["zones_changed"].to_owned()) {
+                            parsed.push(Parsed::Zones(zones));
                         }
-                    } else if body["zones_removed"].is_array() {
-                        let zones_removed: Option<Vec<String>> = serde_json::from_value(body["zones_removed"].to_owned()).ok();
+                    } else if body["zones_added"].is_array() {
+                        if let Ok(zones) = serde_json::from_value(body["zones_added"].to_owned()) {
+                            parsed.push(Parsed::Zones(zones));
+                        }
+                    }
 
-                        return match zones_removed {
-                            Some(zones_removed) => Parsed::ZonesRemoved(zones_removed),
-                            None => Parsed::None
+                    if body["zones_seek_changed"].is_array() {
+                        if let Ok(zones_seek) = serde_json::from_value(body["zones_seek_changed"].to_owned()) {
+                            parsed.push(Parsed::ZonesSeek(zones_seek));
+                        }
+                    }
+
+                    if body["zones_removed"].is_array() {
+                        if let Ok(zones_removed) = serde_json::from_value(body["zones_removed"].to_owned()) {
+                            parsed.push(Parsed::ZonesRemoved(zones_removed))
                         }
                     }
                 } else if response == "Subscribed" {
                     if body["zones"].is_array() {
-                        zones = serde_json::from_value(body["zones"].to_owned()).ok();
+                        if let Ok(zones) = serde_json::from_value(body["zones"].to_owned()) {
+                            parsed.push(Parsed::Zones(zones));
+                        }
                     }
-                }
-
-                return match zones {
-                    Some(zones) => Parsed::Zones(zones),
-                    None => Parsed::None
                 }
             }
         }
 
         if let Some((output_req_id, _)) = *self.output_sub.lock().await {
             if req_id == output_req_id {
-                let mut outputs: Option<Vec<Output>> = None;
-
                 if response == "Changed" {
                     if body["outputs_changed"].is_array() {
-                        outputs = serde_json::from_value(body["outputs_changed"].to_owned()).ok();
+                        if let Ok(outputs) = serde_json::from_value(body["outputs_changed"].to_owned()) {
+                            parsed.push(Parsed::Outputs(outputs));
+                        }
                     } else if body["outputs_added"].is_array() {
-                        outputs = serde_json::from_value(body["outputs_added"].to_owned()).ok();
-                    } else if body["outputs_removed"].is_array() {
-                        let outputs_removed: Option<Vec<String>> = serde_json::from_value(body["outputs_removed"].to_owned()).ok();
+                        if let Ok(outputs) = serde_json::from_value(body["outputs_added"].to_owned()) {
+                            parsed.push(Parsed::Outputs(outputs));
+                        }
+                    }
 
-                        return match outputs_removed {
-                            Some(outputs_removed) => Parsed::OutputsRemoved(outputs_removed),
-                            None => Parsed::None
+                    if body["outputs_removed"].is_array() {
+                        if let Ok(outputs_removed) = serde_json::from_value(body["outputs_removed"].to_owned()) {
+                            parsed.push(Parsed::OutputsRemoved(outputs_removed));
                         }
                     }
                 } else if response == "Subscribed" {
                     if body["outputs"].is_array() {
-                        outputs = serde_json::from_value(body["outputs"].to_owned()).ok();
+                        if let Ok(outputs) = serde_json::from_value(body["outputs"].to_owned()) {
+                            parsed.push(Parsed::Outputs(outputs));
+                        }
                     }
-                }
-
-                return match outputs {
-                    Some(outputs) => Parsed::Outputs(outputs),
-                    None => Parsed::None
                 }
             }
         }
 
         if let Some((queue_req_id, _)) = *self.queue_sub.lock().await {
             if req_id == queue_req_id {
-                let mut queue: Option<Vec<QueueItem>> = None;
-
                 if response == "Changed" {
                     if body["items_changed"].is_array() {
-                        queue = serde_json::from_value(body["items_changed"].to_owned()).ok();
+                        if let Ok(queue) = serde_json::from_value(body["items_changed"].to_owned()) {
+                            parsed.push(Parsed::Queue(queue))
+                        }
                     }
                 } else if response == "Subscribed" {
                     if body["items"].is_array() {
-                        queue = serde_json::from_value(body["items"].to_owned()).ok();
+                        if let Ok(queue) = serde_json::from_value(body["items"].to_owned()) {
+                            parsed.push(Parsed::Queue(queue))
+                        }
                     }
-                }
-
-                return match queue {
-                    Some(queue) => Parsed::Queue(queue),
-                    None => Parsed::None
                 }
             }
         }
 
-        Parsed::None
+        if parsed.len() == 0 {
+            parsed.push(Parsed::None);
+        }
+
+        return parsed
     }
 }
 
