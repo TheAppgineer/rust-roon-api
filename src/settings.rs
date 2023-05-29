@@ -149,12 +149,12 @@ impl Settings {
         (svc, settings)
     }
 
-    pub fn parse_msg(&self, req_id: &usize) -> Parsed {
+    pub fn parse_msg(&self, req_id: &usize, body: Option<&serde_json::Value>) -> Parsed {
         let save_req_id = self.save_req_id.lock().unwrap();
 
         if let Some(save_req_id) = save_req_id.as_ref() {
             if *req_id == *save_req_id {
-                return Parsed::SettingsSaved
+                return Parsed::SettingsSaved(body.unwrap()["settings"]["values"].to_owned())
             }
         }
 
@@ -169,7 +169,7 @@ mod tests {
 
     use super::*;
 
-    #[derive(Default, Deserialize, Serialize)]
+    #[derive(Debug, Default, Deserialize, Serialize)]
     struct MySettings {
         state: bool
     }
@@ -203,14 +203,7 @@ mod tests {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let get_settings = |cb: fn(Layout<MySettings>) -> Vec<RespProps>| -> Vec<RespProps> {
-            let settings = RoonApi::load_config("settings");
-            let settings = if let Ok(settings) = serde_json::from_value::<MySettings>(settings) {
-                settings
-            } else {
-                MySettings {
-                    ..Default::default()
-                }
-            };
+            let settings = serde_json::from_value::<MySettings>(RoonApi::load_config("settings")).unwrap_or_default();
             let layout = make_layout(settings);
 
             cb(layout)
@@ -224,8 +217,6 @@ mod tests {
             send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
 
             if !is_dry_run && !layout["has_error"].as_bool().unwrap() {
-                RoonApi::save_config("settings", layout["values"].to_owned()).unwrap();
-
                 send_continue_all!(resp_props, "subscribe_settings", "Changed", Some(json!({"settings": layout})));
             }
 
@@ -254,8 +245,11 @@ mod tests {
 
                     if let Some((_, parsed)) = msg {
                         match parsed {
-                            Parsed::SettingsSaved => {
-                                println!("Settings saved!");
+                            Parsed::SettingsSaved(settings) => {
+                                RoonApi::save_config("settings", settings.to_owned()).unwrap();
+
+                                let settings = serde_json::from_value::<MySettings>(settings);
+                                println!("Settings saved: {:?}", settings);
                             }
                             _ => ()
                         }

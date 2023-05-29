@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use futures_util::{FutureExt, future::{join_all, select_all, select, Either}};
+use futures_util::{FutureExt, future::{select_all, select, Either}};
 use moo::{Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
 use serde::Serialize;
@@ -309,46 +309,41 @@ impl RoonApi {
                     new_moo = moo_rx.recv().await;
                 } else if response_ids.len() > 0 {
                     for resp_ids in &response_ids {
-                        let mut msg_senders = Vec::new();
                         let mut index: usize = 0;
-    
+
                         for moo in moo_senders.iter_mut() {
                             if let Some(req_id) = resp_ids.get(&index) {
                                 if let Some(msg_string) = &msg_string {
-                                    msg_senders.push(moo.send_msg_string(msg_string).boxed());
+                                    moo.send_msg_string(msg_string).await.unwrap();
                                 } else {
                                     let (hdr, body) = &props_option[index];
 
-                                    msg_senders.push(moo.send_msg(*req_id, *hdr, body.as_ref()).boxed());
-                                }
-                            }
-    
-                            index += 1;
-                        }
-    
-                        join_all(msg_senders).await;
+                                    moo.send_msg(*req_id, *hdr, body.as_ref()).await.unwrap();
 
-                        #[cfg(any(feature = "settings"))]
-                        if let Some(svcs) = services.as_ref() {
-                            for svc in svcs {
-                                match svc {
-                                    Services::Settings(settings) => {
-                                        for (_, req_id) in resp_ids {
-                                            let parsed = settings.parse_msg(req_id);
+                                    #[cfg(any(feature = "settings"))]
+                                    if let Some(svcs) = services.as_ref() {
+                                        for svc in svcs {
+                                            match svc {
+                                                Services::Settings(settings) => {
+                                                    let parsed = settings.parse_msg(req_id, body.as_ref());
 
-                                            match parsed {
-                                                Parsed::None => (),
-                                                _ => {
-                                                    core_tx.send((CoreEvent::None, Some((json!({}), parsed)))).await.unwrap();
+                                                    match parsed {
+                                                        Parsed::None => (),
+                                                        _ => {
+                                                            core_tx.send((CoreEvent::None, Some((json!({}), parsed)))).await.unwrap();
+                                                        }
+                                                    }
+                                                    break;
                                                 }
+                                                #[cfg(any(feature = "status", feature = "browse", feature = "transport"))]
+                                                _ => ()
                                             }
                                         }
-                                        break;
                                     }
-                                    #[cfg(any(feature = "status", feature = "browse", feature = "transport"))]
-                                    _ => ()
                                 }
                             }
+
+                            index += 1;
                         }
                     }
 
@@ -745,7 +740,7 @@ pub enum Services {
 #[derive(Debug)]
 pub enum Parsed {
     None,
-    #[cfg(feature = "settings")]  SettingsSaved,
+    #[cfg(feature = "settings")]  SettingsSaved(serde_json::Value),
     #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
     #[cfg(feature = "transport")] ZonesSeek(Vec<transport::ZoneSeek>),
     #[cfg(feature = "transport")] ZonesRemoved(Vec<String>),
