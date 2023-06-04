@@ -111,7 +111,9 @@ pub struct Transport {
     moo: Option<Moo>,
     zone_sub: Arc<Mutex<Option<(usize, usize)>>>,
     output_sub: Arc<Mutex<Option<(usize, usize)>>>,
-    queue_sub: Arc<Mutex<Option<(usize, usize)>>>
+    queue_sub: Arc<Mutex<Option<(usize, usize)>>>,
+    zone_req_id: Arc<Mutex<Option<usize>>>,
+    output_req_id: Arc<Mutex<Option<usize>>>
 }
 
 impl Transport {
@@ -120,7 +122,9 @@ impl Transport {
             moo: None,
             zone_sub: Arc::new(Mutex::new(None)),
             output_sub: Arc::new(Mutex::new(None)),
-            queue_sub: Arc::new(Mutex::new(None))
+            queue_sub: Arc::new(Mutex::new(None)),
+            zone_req_id: Arc::new(Mutex::new(None)),
+            output_req_id: Arc::new(Mutex::new(None))
         }
     }
 
@@ -259,15 +263,23 @@ impl Transport {
         moo.send_req(SVCNAME.to_owned() + "/change_settings", Some(body)).await.ok()
     }
 
-    pub async fn get_zones(&self) -> Option<usize> {
-        self.moo.as_ref()?.send_req(SVCNAME.to_owned() + "/get_zones", None).await.ok()
+    pub async fn get_zones(&self) {
+        if let Some(moo) = &self.moo {
+            let zone_req_id = moo.send_req(SVCNAME.to_owned() + "/get_zones", None).await.ok();
+
+            *self.zone_req_id.lock().await = zone_req_id;
+        }
     }
 
-    pub async fn get_outputs(&self) -> Option<usize> {
-        self.moo.as_ref()?.send_req(SVCNAME.to_owned() + "/get_outputs", None).await.ok()
+    pub async fn get_outputs(&self) {
+        if let Some(moo) = &self.moo {
+            let output_req_id = moo.send_req(SVCNAME.to_owned() + "/get_outputs", None).await.ok();
+
+            *self.output_req_id.lock().await = output_req_id;
+        }
     }
 
-    pub async fn subscribe_zones(&mut self) {
+    pub async fn subscribe_zones(&self) {
         if let Some(moo) = &self.moo {
             let sub = moo.send_sub_req(SVCNAME, "zones", None).await.ok();
 
@@ -275,7 +287,7 @@ impl Transport {
         }
     }
 
-    pub async fn unsubscribe_zones(&mut self) {
+    pub async fn unsubscribe_zones(&self) {
         if let Some(moo) = &self.moo {
             let mut sub = self.zone_sub.lock().await;
 
@@ -287,7 +299,7 @@ impl Transport {
         }
     }
 
-    pub async fn subscribe_outputs(&mut self) {
+    pub async fn subscribe_outputs(&self) {
         if let Some(moo) = &self.moo {
             let sub = moo.send_sub_req(SVCNAME, "outputs", None).await.ok();
 
@@ -295,7 +307,7 @@ impl Transport {
         }
     }
 
-    pub async fn unsubscribe_outputs(&mut self) {
+    pub async fn unsubscribe_outputs(&self) {
         if let Some(moo) = &self.moo {
             let mut sub = self.output_sub.lock().await;
 
@@ -307,7 +319,7 @@ impl Transport {
         }
     }
 
-    pub async fn subscribe_queue(&mut self, zone_or_output_id: &str, max_item_count: u32) {
+    pub async fn subscribe_queue(&self, zone_or_output_id: &str, max_item_count: u32) {
         if let Some(moo) = &self.moo {
             let args = json!({
                 "zone_or_output_id": zone_or_output_id,
@@ -319,7 +331,7 @@ impl Transport {
         }
     }
 
-    pub async fn unsubscribe_queue(&mut self) {
+    pub async fn unsubscribe_queue(&self) {
         if let Some(moo) = &self.moo {
             let mut sub = self.queue_sub.lock().await;
 
@@ -376,6 +388,26 @@ impl Transport {
                         if let Ok(zones) = serde_json::from_value(body["zones"].to_owned()) {
                             parsed.push(Parsed::Zones(zones));
                         }
+                    }
+                }
+            }
+        }
+
+        if let Some(zone_req_id) = *self.zone_req_id.lock().await {
+            if req_id == zone_req_id && response == "Success" {
+                if body["zones"].is_array() {
+                    if let Ok(zones) = serde_json::from_value(body["zones"].to_owned()) {
+                        parsed.push(Parsed::Zones(zones));
+                    }
+                }
+            }
+        }
+
+        if let Some(output_req_id) = *self.output_req_id.lock().await {
+            if req_id == output_req_id && response == "Success" {
+                if body["outputs"].is_array() {
+                    if let Ok(outputs) = serde_json::from_value(body["outputs"].to_owned()) {
+                        parsed.push(Parsed::Outputs(outputs));
                     }
                 }
             }
@@ -480,7 +512,7 @@ mod tests {
                             Parsed::Zones(zones) => {
                                 for zone in zones {
                                     if zone.settings.auto_radio {
-                                        if let Some(transport) = transport.as_mut() {
+                                        if let Some(transport) = transport.as_ref() {
                                             let mut settings = zone.settings;
 
                                             settings.auto_radio = false;
@@ -491,14 +523,14 @@ mod tests {
                             }
                             Parsed::ZonesSeek(_zones_seek) => (),
                             Parsed::ZonesRemoved(_zones_removed) => {
-                                if let Some(transport) = transport.as_mut() {
+                                if let Some(transport) = transport.as_ref() {
                                     transport.unsubscribe_zones().await;
                                 }
                             }
                             Parsed::Outputs(outputs) => {
                                 let output_id = &outputs[0].output_id;
     
-                                if let Some(transport) = transport.as_mut() {
+                                if let Some(transport) = transport.as_ref() {
                                     transport.subscribe_queue(&output_id, 20).await;
                                 }
                             }
