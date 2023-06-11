@@ -492,13 +492,11 @@ mod tests {
                         CoreEvent::Found(mut core) => {
                             println!("Core found: {}, version {}", core.display_name, core.display_version);
 
-                            transport = if let Some(transport) = core.get_transport() {
+                            transport = core.get_transport().cloned();
+
+                            if let Some(transport) = transport.as_ref() {
                                 transport.subscribe_zones().await;
                                 transport.subscribe_outputs().await;
-
-                                Some(transport.clone())
-                            } else {
-                                None
                             }
                         }
                         CoreEvent::Lost(core) => {

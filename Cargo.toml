@@ -2,6 +2,8 @@
 name = "rust-roon-api"
 version = "0.0.1"
 authors = ["The Appgineer"]
+license-file = "LICENSE"
+readme = "README.md"
 repository = "https://github.com/theappgineer/rust-roon-api"
 edition = "2021"
 publish = false
