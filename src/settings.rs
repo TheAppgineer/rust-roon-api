@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::ParseIntError;
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,9 +28,20 @@ pub struct Group {
 pub struct Integer {
     pub title: &'static str,
     pub subtitle: Option<String>,
-    pub min: Option<i32>,
-    pub max: Option<i32>,
-    pub setting: &'static str
+    pub min: String,
+    pub max: String,
+    pub setting: &'static str,
+    pub error: Option<String>
+}
+
+impl Integer {
+    pub fn out_of_range(&self, value_str: &str) -> Result<bool, ParseIntError> {
+        let value = value_str.parse::<i32>()?;
+        let min = self.min.parse::<i32>()?;
+        let max = self.max.parse::<i32>()?;
+
+        Ok(value < min || value > max)
+    }
 }
 
 #[derive(Serialize)]
@@ -171,11 +183,12 @@ mod tests {
 
     #[derive(Debug, Default, Deserialize, Serialize)]
     struct MySettings {
-        state: bool
+        state: bool,
+        integer: String
     }
 
     fn make_layout(settings: MySettings) -> Layout<MySettings> {
-        let has_error = false;
+        let mut has_error = false;
         let mut widgets = Vec::new();
         let mut values = Vec::new();
 
@@ -189,7 +202,24 @@ mod tests {
             setting: "state"
         });
 
+        let mut integer = Integer {
+            title: "Integer",
+            subtitle: None,
+            min: "0".to_owned(),
+            max: "100".to_owned(),
+            setting: "integer",
+            error: None
+        };
+
+        if let Ok(out_of_range) = integer.out_of_range(&settings.integer) {
+            if out_of_range {
+                integer.error = Some(format!("Value should be between {} and {}", integer.min, integer.max));
+                has_error = true;
+            }
+        }
+
         widgets.push(dropdown);
+        widgets.push(Widget::Integer(integer));
 
         Layout {
             settings,
@@ -212,12 +242,17 @@ mod tests {
             let mut resp_props: Vec<RespProps> = Vec::new();
 
             let layout = make_layout(settings);
+            let has_error = layout.has_error;
             let layout = layout.serialize(serde_json::value::Serializer).unwrap();
 
-            send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
+            if has_error {
+                send_complete!(resp_props, "NotValid", Some(json!({"settings": layout})));
+            } else {
+                send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
 
-            if !is_dry_run && !layout["has_error"].as_bool().unwrap() {
-                send_continue_all!(resp_props, "subscribe_settings", "Changed", Some(json!({"settings": layout})));
+                if !is_dry_run {
+                    send_continue_all!(resp_props, "subscribe_settings", "Changed", Some(json!({"settings": layout})));
+                }
             }
 
             resp_props
