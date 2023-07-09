@@ -37,7 +37,7 @@ pub struct Output {
     pub zone_id: String,
     pub can_group_with_output_ids: Vec<String>,
     pub display_name: String,
-    pub volume: Volume,
+    pub volume: Option<Volume>,
     pub source_controls: Vec<SourceControls>
 }
 
