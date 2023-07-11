@@ -524,15 +524,19 @@ impl RoonApi {
                                 match svc {
                                     #[cfg(feature = "transport")]
                                     Services::Transport(transport) => {
-                                        let mut parsed = transport.parse_msg(&msg).await;
-
-                                        while parsed.len() > 1 {
-                                            let item = parsed.pop().unwrap();
-
-                                            core_tx.send((CoreEvent::None, Some((serde_json::Value::Null, item)))).await.unwrap();
+                                        if let Ok(mut parsed) = transport.parse_msg(&msg).await {
+                                            while parsed.len() > 1 {
+                                                let item = parsed.pop().unwrap();
+    
+                                                core_tx.send((CoreEvent::None, Some((serde_json::Value::Null, item)))).await.unwrap();
+                                            }
+    
+                                            core_tx.send((CoreEvent::None, Some((msg, parsed.pop().unwrap())))).await.unwrap();
+                                        } else {
+                                            println!("Failed to parse message: {}", msg);
+    
+                                            core_tx.send((CoreEvent::None, Some((msg, Parsed::None)))).await.unwrap();
                                         }
-
-                                        core_tx.send((CoreEvent::None, Some((msg, parsed.pop().unwrap())))).await.unwrap();
 
                                         break;
                                     }
