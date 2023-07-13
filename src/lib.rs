@@ -759,8 +759,8 @@ pub enum Parsed {
     #[cfg(feature = "transport")] Outputs(Vec<transport::Output>),
     #[cfg(feature = "transport")] OutputsRemoved(Vec<String>),
     #[cfg(feature = "transport")] Queue(Vec<transport::QueueItem>),
-    #[cfg(feature = "browse")]    List(browse::List),
-    #[cfg(feature = "browse")]    Items(Vec<browse::Item>),
+    #[cfg(feature = "browse")]    BrowseResult(browse::BrowseResult),
+    #[cfg(feature = "browse")]    LoadResult(browse::LoadResult),
 }
 
 #[derive(Serialize)]
