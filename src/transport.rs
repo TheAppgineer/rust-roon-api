@@ -446,10 +446,6 @@ impl Transport {
             }
         }
 
-        if parsed.len() == 0 {
-            parsed.push(Parsed::None);
-        }
-
         return Ok(parsed)
     }
 }

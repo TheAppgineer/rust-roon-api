@@ -525,26 +525,33 @@ impl RoonApi {
                                     #[cfg(feature = "transport")]
                                     Services::Transport(transport) => {
                                         if let Ok(mut parsed) = transport.parse_msg(&msg).await {
-                                            while parsed.len() > 1 {
-                                                let item = parsed.pop().unwrap();
-    
-                                                core_tx.send((CoreEvent::None, Some((serde_json::Value::Null, item)))).await.unwrap();
+                                            if let Some(item) = parsed.pop() {
+                                                core_tx.send((CoreEvent::None, Some((msg, item)))).await.unwrap();
+
+                                                while let Some(item) = parsed.pop() {        
+                                                    core_tx.send((CoreEvent::None, Some((serde_json::Value::Null, item)))).await.unwrap();
+                                                }
+
+                                                break;
                                             }
-    
-                                            core_tx.send((CoreEvent::None, Some((msg, parsed.pop().unwrap())))).await.unwrap();
                                         } else {
                                             println!("Failed to parse message: {}", msg);
     
                                             core_tx.send((CoreEvent::None, Some((msg, Parsed::None)))).await.unwrap();
+                                            break;
                                         }
-
-                                        break;
                                     }
                                     #[cfg(feature = "browse")]
                                     Services::Browse(browse) => {
                                         let parsed = browse.parse_msg(&msg);
-                                        core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
-                                        break;
+
+                                        match parsed {
+                                            Parsed::None => (),
+                                            _ => {
+                                                core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
+                                                break;
+                                            }
+                                        }
                                     }
                                     #[cfg(feature = "status")]
                                     _ => ()
