@@ -4,7 +4,7 @@ use crate::{Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.browse:1";
 
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hierarchy {
     #[default] Browse,
@@ -45,7 +45,7 @@ pub enum ItemHint {
     Header
 }
 
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct BrowseOpts {
     pub hierarchy: Hierarchy,
     pub multi_session_key: Option<String>,
@@ -58,7 +58,7 @@ pub struct BrowseOpts {
     pub set_display_offset: Option<usize>
 }
 
-#[derive(Default, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct LoadOpts {
     pub hierarchy: Hierarchy,
     pub multi_session_key: Option<String>,

@@ -28,7 +28,7 @@ pub struct Zone {
 pub struct ZoneSeek {
     pub zone_id: String,
     pub queue_time_remaining: i64,
-    pub seek_position: i64
+    pub seek_position: Option<i64>
 }
 
 #[derive(Debug, Deserialize)]
