@@ -73,17 +73,17 @@ impl Core {
 
     #[cfg(feature = "browse")]
     pub fn get_browse(&mut self) -> Option<&browse::Browse> {
-        if let Some(services) = self.services.as_mut() {
-            for svc in services {
-                match svc {
-                    Services::Browse(browse) => {
-                        browse.set_moo(self.moo.clone());
+        let services = self.services.as_mut()?;
 
-                        return Some(browse)
-                    }
-                    #[cfg(any(feature = "status", feature = "transport"))]
-                    _ => ()
+        for svc in services {
+            match svc {
+                Services::Browse(browse) => {
+                    browse.set_moo(self.moo.clone());
+
+                    return Some(browse)
                 }
+                #[cfg(any(feature = "status", feature = "transport"))]
+                _ => ()
             }
         }
 
@@ -92,17 +92,17 @@ impl Core {
 
     #[cfg(feature = "status")]
     pub fn get_status(&mut self) -> Option<&status::Status> {
-        if let Some(services) = self.services.as_mut() {
-            for svc in services {
-                match svc {
-                    Services::Status(status) => {
-                        status.set_moo(self.moo.clone());
+        let services = self.services.as_mut()?;
 
-                        return Some(status)
-                    }
-                    #[cfg(any(feature = "browse", feature = "transport"))]
-                    _ => ()
+        for svc in services {
+            match svc {
+                Services::Status(status) => {
+                    status.set_moo(self.moo.clone());
+
+                    return Some(status)
                 }
+                #[cfg(any(feature = "browse", feature = "transport"))]
+                _ => ()
             }
         }
 
@@ -203,7 +203,7 @@ impl RoonApi {
                     if let Err(err) = sood.query(&QUERY).await {
                         println!("{}", err);
                     }
-            }
+                }
 
                 scan_count += 1;
 
@@ -766,6 +766,7 @@ pub enum Parsed {
     #[cfg(feature = "transport")] Outputs(Vec<transport::Output>),
     #[cfg(feature = "transport")] OutputsRemoved(Vec<String>),
     #[cfg(feature = "transport")] Queue(Vec<transport::QueueItem>),
+    #[cfg(feature = "transport")] QueueChanges(Vec<transport::QueueChange>),
     #[cfg(feature = "browse")]    BrowseResult(browse::BrowseResult),
     #[cfg(feature = "browse")]    LoadResult(browse::LoadResult),
 }

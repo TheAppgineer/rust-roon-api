@@ -7,7 +7,7 @@ use crate::{Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.transport:2";
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Zone {
     pub zone_id: String,
     pub display_name: String,
@@ -21,27 +21,27 @@ pub struct Zone {
     pub queue_items_remaining: i64,
     pub queue_time_remaining: i64,
     pub now_playing: Option<NowPlaying>,
-    pub settings: Settings
+    pub settings: Settings,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ZoneSeek {
     pub zone_id: String,
     pub queue_time_remaining: i64,
-    pub seek_position: Option<i64>
+    pub seek_position: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Output {
     pub output_id: String,
     pub zone_id: String,
     pub can_group_with_output_ids: Vec<String>,
     pub display_name: String,
     pub volume: Option<Volume>,
-    pub source_controls: Vec<SourceControls>
+    pub source_controls: Vec<SourceControls>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Volume {
     #[serde(rename = "type")] pub scale: String,
     pub min: i8,
@@ -51,59 +51,74 @@ pub struct Volume {
     pub is_muted: bool,
     pub hard_limit_min: i8,
     pub hard_limit_max: i8,
-    pub soft_limit: i8
+    pub soft_limit: i8,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct SourceControls {
     pub control_key: String,
     pub display_name: String,
     pub supports_standby: bool,
-    pub status: String
+    pub status: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
     #[serde(rename = "loop")] pub repeat: String,
     pub shuffle: bool,
-    pub auto_radio: bool
+    pub auto_radio: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct NowPlaying {
     pub image_key: String,
     pub seek_position: Option<i64>,
     pub one_line: OneLine,
     pub two_line: TwoLine,
-    pub three_line: ThreeLine
+    pub three_line: ThreeLine,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct QueueItem {
     pub image_key: String,
     pub length: u32,
     pub queue_item_id: u32,
     pub one_line: OneLine,
     pub two_line: TwoLine,
-    pub three_line: ThreeLine
+    pub three_line: ThreeLine,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueOperation {
+    Insert,
+    Remove,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct QueueChange {
+    pub operation: QueueOperation,
+    pub index: usize,
+    pub items: Option<Vec<QueueItem>>,
+    pub count: Option<usize>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct OneLine {
-    pub line1: String
+    pub line1: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct TwoLine {
     pub line1: String,
-    pub line2: String
+    pub line2: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct ThreeLine {
     pub line1: String,
     pub line2: String,
-    pub line3: String
+    pub line3: String,
 }
 
 #[derive(Clone, Debug)]
@@ -113,7 +128,7 @@ pub struct Transport {
     output_sub: Arc<Mutex<Option<(usize, usize)>>>,
     queue_sub: Arc<Mutex<Option<(usize, usize)>>>,
     zone_req_id: Arc<Mutex<Option<usize>>>,
-    output_req_id: Arc<Mutex<Option<usize>>>
+    output_req_id: Arc<Mutex<Option<usize>>>,
 }
 
 impl Transport {
@@ -124,7 +139,7 @@ impl Transport {
             output_sub: Arc::new(Mutex::new(None)),
             queue_sub: Arc::new(Mutex::new(None)),
             zone_req_id: Arc::new(Mutex::new(None)),
-            output_req_id: Arc::new(Mutex::new(None))
+            output_req_id: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -343,7 +358,7 @@ impl Transport {
         }
     }
 
-    pub async fn play_from_here(&self, zone_or_output_id: &str, queue_item_id: &str) -> Option<usize> {
+    pub async fn play_from_here(&self, zone_or_output_id: &str, queue_item_id: u32) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let body = json!({
             "zone_or_output_id": zone_or_output_id,
@@ -433,13 +448,15 @@ impl Transport {
         if let Some((queue_req_id, _)) = *self.queue_sub.lock().await {
             if req_id == queue_req_id {
                 if response == "Changed" {
-                    if body["items_changed"].is_array() {
-                        let queue = serde_json::from_value(body["items_changed"].to_owned())?;
-                        parsed.push(Parsed::Queue(queue));
+                    if body["changes"].is_array() {
+                        let changes = serde_json::from_value(body["changes"].to_owned())?;
+
+                        parsed.push(Parsed::QueueChanges(changes));
                     }
                 } else if response == "Subscribed" {
                     if body["items"].is_array() {
                         let queue = serde_json::from_value(body["items"].to_owned())?;
+
                         parsed.push(Parsed::Queue(queue));
                     }
                 }
