@@ -71,7 +71,7 @@ pub struct Settings {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NowPlaying {
-    pub image_key: String,
+    pub image_key: Option<String>,
     pub seek_position: Option<i64>,
     pub one_line: OneLine,
     pub two_line: TwoLine,
@@ -80,7 +80,7 @@ pub struct NowPlaying {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct QueueItem {
-    pub image_key: String,
+    pub image_key: Option<String>,
     pub length: u32,
     pub queue_item_id: u32,
     pub one_line: OneLine,
