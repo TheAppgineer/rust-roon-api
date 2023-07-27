@@ -62,7 +62,7 @@ impl Core {
 
                         return Some(transport)
                     }
-                    #[cfg(any(feature = "status", feature = "browse"))]
+                    #[cfg(any(feature = "status", feature = "settings", feature = "browse"))]
                     _ => ()
                 }
             }
@@ -82,7 +82,7 @@ impl Core {
 
                     return Some(browse)
                 }
-                #[cfg(any(feature = "status", feature = "transport"))]
+                #[cfg(any(feature = "status", feature = "settings", feature = "transport"))]
                 _ => ()
             }
         }
@@ -101,7 +101,7 @@ impl Core {
 
                     return Some(status)
                 }
-                #[cfg(any(feature = "browse", feature = "transport"))]
+                #[cfg(any(feature = "browse", feature = "transport", feature = "settings"))]
                 _ => ()
             }
         }
@@ -170,7 +170,7 @@ impl RoonApi {
                     Services::Browse(_) => {
                         self.reg_info["required_services"].as_array_mut().unwrap().push(json!(browse::SVCNAME));
                     }
-                    #[cfg(any(feature = "status"))]
+                    #[cfg(any(feature = "status", feature = "settings"))]
                     _ => ()
                 }
             }
@@ -553,7 +553,7 @@ impl RoonApi {
                                             }
                                         }
                                     }
-                                    #[cfg(feature = "status")]
+                                    #[cfg(any(feature = "status", feature = "settings"))]
                                     _ => ()
                                 }
                             }
