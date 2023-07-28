@@ -8,11 +8,44 @@ use crate::{Moo, Parsed};
 pub const SVCNAME: &str = "com.roonlabs.transport:2";
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum State {
+    Playing,
+    Paused,
+    Loading,
+    Stopped,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum Repeat {
+    #[serde(rename = "disabled")] Off,
+    #[serde(rename = "loop")]     All,
+    #[serde(rename = "loop_one")] One,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Selected,
+    Deselected,
+    Standby,
+    Indeterminate,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scale {
+    Number,
+    Db,
+    Incremental,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct Zone {
     pub zone_id: String,
     pub display_name: String,
     pub outputs: Vec<Output>,
-    pub state: String,
+    pub state: State,
     pub is_next_allowed: bool,
     pub is_previous_allowed: bool,
     pub is_pause_allowed: bool,
@@ -43,7 +76,7 @@ pub struct Output {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Volume {
-    #[serde(rename = "type")] pub scale: String,
+    #[serde(rename = "type")] pub scale: Scale,
     pub min: i8,
     pub max: i8,
     pub value: i8,
@@ -59,19 +92,21 @@ pub struct SourceControls {
     pub control_key: String,
     pub display_name: String,
     pub supports_standby: bool,
-    pub status: String,
+    pub status: Status,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Settings {
-    #[serde(rename = "loop")] pub repeat: String,
+    #[serde(rename = "loop")] pub repeat: Repeat,
     pub shuffle: bool,
     pub auto_radio: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NowPlaying {
+    pub artist_image_keys: Option<Vec<String>>,
     pub image_key: Option<String>,
+    pub length: Option<u32>,
     pub seek_position: Option<i64>,
     pub one_line: OneLine,
     pub two_line: TwoLine,
