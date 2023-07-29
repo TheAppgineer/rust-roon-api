@@ -7,7 +7,47 @@ use crate::{Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.transport:2";
 
-#[derive(Clone, Debug, Deserialize)]
+pub mod volume {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Scale {
+        Number,
+        #[serde(rename = "db")] Decibel,
+        Incremental,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ChangeMode {
+        Absolute,
+        Relative,
+        RelativeStep,
+    }
+
+    #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Mute {
+        Mute,
+        Unmute,
+    }
+
+    #[derive(Clone, Debug, Deserialize)]
+    pub struct Volume {
+        #[serde(rename = "type")] pub scale: Scale,
+        pub min: i8,
+        pub max: i8,
+        pub value: i8,
+        pub step: i8,
+        pub is_muted: bool,
+        pub hard_limit_min: i8,
+        pub hard_limit_max: i8,
+        pub soft_limit: i8,
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
     Playing,
@@ -16,14 +56,25 @@ pub enum State {
     Stopped,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Control {
+    Play,
+    Pause,
+    PlayPause,
+    Stop,
+    Previous,
+    Next,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Repeat {
     #[serde(rename = "disabled")] Off,
     #[serde(rename = "loop")]     All,
     #[serde(rename = "loop_one")] One,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Selected,
@@ -32,12 +83,11 @@ pub enum Status {
     Indeterminate,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Scale {
-    Number,
-    Db,
-    Incremental,
+pub enum Seek {
+    Absolute,
+    Relative,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -70,21 +120,8 @@ pub struct Output {
     pub zone_id: String,
     pub can_group_with_output_ids: Vec<String>,
     pub display_name: String,
-    pub volume: Option<Volume>,
+    pub volume: Option<volume::Volume>,
     pub source_controls: Vec<SourceControls>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct Volume {
-    #[serde(rename = "type")] pub scale: Scale,
-    pub min: i8,
-    pub max: i8,
-    pub value: i8,
-    pub step: i8,
-    pub is_muted: bool,
-    pub hard_limit_min: i8,
-    pub hard_limit_max: i8,
-    pub soft_limit: i8,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -123,7 +160,7 @@ pub struct QueueItem {
     pub three_line: ThreeLine,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum QueueOperation {
     Insert,
@@ -182,10 +219,11 @@ impl Transport {
         self.moo = Some(moo);
     }
 
-    pub async fn mute_all(&self, how: &str) -> Option<usize> {
+    pub async fn mute_all(&self, how: &volume::Mute) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let how = how.serialize(serde_json::value::Serializer).ok()?;
         let body = json!({
-            "how": how
+            "how": how,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/mute_all", Some(body)).await.ok()
@@ -198,7 +236,7 @@ impl Transport {
     pub async fn standby(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let mut body = json!({
-            "output_id": output_id
+            "output_id": output_id,
         });
 
         if let Some(control_key) = control_key {
@@ -211,7 +249,7 @@ impl Transport {
     pub async fn toggle_standby(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let mut body = json!({
-            "output_id": output_id
+            "output_id": output_id,
         });
 
         if let Some(control_key) = control_key {
@@ -224,7 +262,7 @@ impl Transport {
     pub async fn convenience_switch(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let mut body = json!({
-            "output_id": output_id
+            "output_id": output_id,
         });
 
         if let Some(control_key) = control_key {
@@ -234,43 +272,47 @@ impl Transport {
         moo.send_req(SVCNAME.to_owned() + "/convenience_switch", Some(body)).await.ok()
     }
 
-    pub async fn mute(&self, output_id: &str, how: &str) -> Option<usize> {
+    pub async fn mute(&self, output_id: &str, how: &volume::Mute) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let how = how.serialize(serde_json::value::Serializer).ok()?;
         let body = json!({
             "output_id": output_id,
-            "how": how
+            "how": how,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/mute", Some(body)).await.ok()
     }
 
-    pub async fn change_volume(&self, output_id: &str, how: &str, value: i32) -> Option<usize> {
+    pub async fn change_volume(&self, output_id: &str, how: &volume::ChangeMode, value: i32) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let how = how.serialize(serde_json::value::Serializer).ok()?;
         let body = json!({
             "output_id": output_id,
             "how": how,
-            "value": value
+            "value": value,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/change_volume", Some(body)).await.ok()
     }
 
-    pub async fn seek(&self, zone_or_output_id: &str, how: &str, seconds: i32) -> Option<usize> {
+    pub async fn seek(&self, zone_or_output_id: &str, how: &Seek, seconds: i32) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let how = how.serialize(serde_json::value::Serializer).ok()?;
         let body = json!({
             "zone_or_output_id": zone_or_output_id,
             "how": how,
-            "seconds": seconds
+            "seconds": seconds,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/seek", Some(body)).await.ok()
     }
 
-    pub async fn control(&self, zone_or_output_id: &str, control: &str) -> Option<usize> {
+    pub async fn control(&self, zone_or_output_id: &str, control: &Control) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let control = control.serialize(serde_json::value::Serializer).ok()?;
         let body = json!({
             "zone_or_output_id": zone_or_output_id,
-            "control": control
+            "control": control,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/control", Some(body)).await.ok()
@@ -280,7 +322,7 @@ impl Transport {
         let moo = self.moo.as_ref()?;
         let body = json!({
             "from_zone_or_output_id": from_zone_or_output_id,
-            "to_zone_or_output_id": to_zone_or_output_id
+            "to_zone_or_output_id": to_zone_or_output_id,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/transfer_zone", Some(body)).await.ok()
@@ -289,7 +331,7 @@ impl Transport {
     pub async fn group_outputs(&self, output_ids: Vec<&str>) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let body = json!({
-            "output_ids": output_ids
+            "output_ids": output_ids,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/group_outputs", Some(body)).await.ok()
@@ -298,7 +340,7 @@ impl Transport {
     pub async fn ungroup_outputs(&self, output_ids: Vec<&str>) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let body = json!({
-            "output_ids": output_ids
+            "output_ids": output_ids,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/ungroup_outputs", Some(body)).await.ok()
@@ -373,7 +415,7 @@ impl Transport {
         if let Some(moo) = &self.moo {
             let args = json!({
                 "zone_or_output_id": zone_or_output_id,
-                "max_item_count": max_item_count
+                "max_item_count": max_item_count,
             });
             let sub = moo.send_sub_req(SVCNAME, "queue", Some(args)).await.ok();
 
@@ -397,7 +439,7 @@ impl Transport {
         let moo = self.moo.as_ref()?;
         let body = json!({
             "zone_or_output_id": zone_or_output_id,
-            "queue_item_id": queue_item_id
+            "queue_item_id": queue_item_id,
         });
 
         moo.send_req(SVCNAME.to_owned() + "/play_from_here", Some(body)).await.ok()
