@@ -457,7 +457,9 @@ impl Transport {
                     if body["zones_changed"].is_array() {
                         let zones = serde_json::from_value(body["zones_changed"].to_owned())?;
                         parsed.push(Parsed::Zones(zones));
-                    } else if body["zones_added"].is_array() {
+                    }
+
+                    if body["zones_added"].is_array() {
                         let zones = serde_json::from_value(body["zones_added"].to_owned())?;
                         parsed.push(Parsed::Zones(zones));
                     }
@@ -504,7 +506,9 @@ impl Transport {
                     if body["outputs_changed"].is_array() {
                         let outputs = serde_json::from_value(body["outputs_changed"].to_owned())?;
                         parsed.push(Parsed::Outputs(outputs));
-                    } else if body["outputs_added"].is_array() {
+                    }
+
+                    if body["outputs_added"].is_array() {
                         let outputs = serde_json::from_value(body["outputs_added"].to_owned())?;
                         parsed.push(Parsed::Outputs(outputs));
                     }
