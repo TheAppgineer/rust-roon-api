@@ -162,11 +162,13 @@ impl Settings {
     }
 
     pub fn parse_msg(&self, req_id: &usize, body: Option<&serde_json::Value>) -> Parsed {
-        let save_req_id = self.save_req_id.lock().unwrap();
+        if let Some(body) = body {
+            let save_req_id = self.save_req_id.lock().unwrap();
 
-        if let Some(save_req_id) = save_req_id.as_ref() {
-            if *req_id == *save_req_id {
-                return Parsed::SettingsSaved(body.unwrap()["settings"]["values"].to_owned())
+            if let Some(save_req_id) = save_req_id.as_ref() {
+                if *req_id == *save_req_id {
+                    return Parsed::SettingsSaved(body["settings"]["values"].to_owned())
+                }
             }
         }
 
