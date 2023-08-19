@@ -36,11 +36,11 @@ pub mod volume {
     #[derive(Clone, Debug, Deserialize)]
     pub struct Volume {
         #[serde(rename = "type")] pub scale: Scale,
-        pub min: i8,
-        pub max: i8,
-        pub value: i8,
-        pub step: i8,
-        pub is_muted: bool,
+        pub min: Option<i8>,
+        pub max: Option<i8>,
+        pub value: Option<i8>,
+        pub step: Option<i8>,
+        pub is_muted: Option<bool>,
         pub hard_limit_min: i8,
         pub hard_limit_max: i8,
         pub soft_limit: i8,
@@ -608,7 +608,7 @@ mod tests {
                             }
                             Parsed::Outputs(outputs) => {
                                 let output_id = &outputs[0].output_id;
-    
+
                                 if let Some(transport) = transport.as_ref() {
                                     transport.subscribe_queue(&output_id, 20).await;
                                 }
