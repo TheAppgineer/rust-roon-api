@@ -262,10 +262,13 @@ mod tests {
         let (svc, settings) = Settings::new(&roon, Box::new(get_settings), Box::new(save_settings));
         let services = vec![Services::Settings(settings)];
         let mut provided: HashMap<String, Svc> = HashMap::new();
+        fn get_roon_state() -> serde_json::Value {
+            RoonApi::load_config("roonstate")
+        }
 
         provided.insert(settings::SVCNAME.to_owned(), svc);
 
-        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
+        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             loop {
@@ -280,8 +283,11 @@ mod tests {
                         _ => ()
                     }
 
-                    if let Some((_, parsed)) = msg {
+                    if let Some((msg, parsed)) = msg {
                         match parsed {
+                            Parsed::RoonState => {
+                                RoonApi::save_config("roonstate", msg).unwrap();
+                            }
                             Parsed::SettingsSaved(settings) => {
                                 RoonApi::save_config("settings", settings.to_owned()).unwrap();
 

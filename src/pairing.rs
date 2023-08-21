@@ -38,11 +38,6 @@ impl Pairing {
                     }
                 }
 
-                let mut settings = RoonApi::load_config("roonstate");
-
-                settings["paired_core_id"] = core.id.clone().into();
-                RoonApi::save_config("roonstate", settings).unwrap();
-
                 *paired_core = Some(core.to_owned());
 
                 let body = json!({"paired_core_id": core.id});
@@ -88,18 +83,21 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{CoreEvent, Info, info};
+    use crate::{CoreEvent, Info, Parsed, info};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
-        let (mut handles, mut core_rx) = roon.start_discovery(provided).await.unwrap();
+        fn get_roon_state() -> serde_json::Value {
+            RoonApi::load_config("roonstate")
+        }
+        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             loop {
-                if let Some((core, _)) = core_rx.recv().await {
+                if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(core) => {
                             println!("Core found: {}, version {}", core.display_name, core.display_version);
@@ -107,7 +105,13 @@ mod tests {
                         CoreEvent::Lost(core) => {
                             println!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
-                        _ => ()
+                        _ => (),
+                    }
+
+                    if let Some((msg, parsed)) = msg {
+                        if let Parsed::RoonState = parsed {
+                            RoonApi::save_config("roonstate", msg).unwrap();
+                        }
                     }
                 }
             }

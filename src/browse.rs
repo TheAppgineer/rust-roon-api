@@ -230,7 +230,10 @@ mod tests {
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Browse(Browse::new())];
         let provided: HashMap<String, Svc> = HashMap::new();
-        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
+        fn get_roon_state() -> serde_json::Value {
+            RoonApi::load_config("roonstate")
+        }
+        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             const HIERARCHY: Hierarchy = Hierarchy::Browse;
@@ -261,9 +264,12 @@ mod tests {
                         _ => ()
                     }
 
-                    if let Some((_, parsed)) = msg {
+                    if let Some((msg, parsed)) = msg {
                         if let Some(browse) = browse.as_ref() {
                             match parsed {
+                                Parsed::RoonState => {
+                                    RoonApi::save_config("roonstate", msg).unwrap();
+                                }
                                 Parsed::BrowseResult(result) => {
                                     match result.action {
                                         Action::List => {
@@ -281,9 +287,9 @@ mod tests {
                                                     set_display_offset: offset,
                                                     ..Default::default()
                                                 };
-                
+
                                                 println!("[{} (page {} of {})]", list.title, page_no, page_count);
-            
+
                                                 browse.load(&opts).await;
                                             }
                                         }
@@ -314,7 +320,7 @@ mod tests {
                                                 opts.set_display_offset = Some(result.offset - PAGE_ITEM_COUNT);
                                             }
                                         }
-        
+
                                         browse.browse(&opts).await;
                                     }
                                 }

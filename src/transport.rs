@@ -562,7 +562,10 @@ mod tests {
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Transport(Transport::new())];
         let provided: HashMap<String, Svc> = HashMap::new();
-        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
+        fn get_roon_state() -> serde_json::Value {
+            RoonApi::load_config("roonstate")
+        }
+        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             let mut transport = None;
@@ -586,8 +589,11 @@ mod tests {
                         _ => ()
                     }
 
-                    if let Some((_, parsed)) = msg {
+                    if let Some((msg, parsed)) = msg {
                         match parsed {
+                            Parsed::RoonState => {
+                                RoonApi::save_config("roonstate", msg).unwrap();
+                            }
                             Parsed::Zones(zones) => {
                                 for zone in zones {
                                     if zone.settings.auto_radio {

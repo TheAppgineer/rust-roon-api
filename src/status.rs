@@ -106,7 +106,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::status::{self, Status};
-    use crate::{CoreEvent, Info, Services, info};
+    use crate::{CoreEvent, Info, Parsed, Services, info};
 
     use super::*;
 
@@ -117,14 +117,17 @@ mod tests {
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];
         let mut provided: HashMap<String, Svc> = HashMap::new();
+        fn get_roon_state() -> serde_json::Value {
+            RoonApi::load_config("roonstate")
+        }
 
         provided.insert(status::SVCNAME.to_owned(), svc);
 
-        let (mut handles, mut core_rx) = roon.start_discovery(provided, Some(services)).await.unwrap();
+        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             loop {
-                if let Some((core, _)) = core_rx.recv().await {
+                if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(mut core) => {
                             let message = format!("Core found: {}, version {}", core.display_name, core.display_version);
@@ -137,6 +140,12 @@ mod tests {
                             println!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
+                    }
+
+                    if let Some((msg, parsed)) = msg {
+                        if let Parsed::RoonState = parsed {
+                            RoonApi::save_config("roonstate", msg).unwrap();
+                        }
                     }
                 }
             }
