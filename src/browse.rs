@@ -223,6 +223,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
+        const CONFIG_PATH: &str = "config.json";
         let mut info = info!("com.theappgineer", "Rust Roon API");
 
         info.set_log_level(LogLevel::None);
@@ -231,7 +232,7 @@ mod tests {
         let services = vec![Services::Browse(Browse::new())];
         let provided: HashMap<String, Svc> = HashMap::new();
         fn get_roon_state() -> serde_json::Value {
-            RoonApi::load_config("roonstate")
+            RoonApi::load_config(CONFIG_PATH, "roonstate")
         }
         let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided, Some(services)).await.unwrap();
 
@@ -268,7 +269,7 @@ mod tests {
                         if let Some(browse) = browse.as_ref() {
                             match parsed {
                                 Parsed::RoonState => {
-                                    RoonApi::save_config("roonstate", msg).unwrap();
+                                    RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                                 }
                                 Parsed::BrowseResult(result) => {
                                     match result.action {

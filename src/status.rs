@@ -112,13 +112,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
+        const CONFIG_PATH: &str = "config.json";
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];
         let mut provided: HashMap<String, Svc> = HashMap::new();
         fn get_roon_state() -> serde_json::Value {
-            RoonApi::load_config("roonstate")
+            RoonApi::load_config(CONFIG_PATH, "roonstate")
         }
 
         provided.insert(status::SVCNAME.to_owned(), svc);
@@ -144,7 +145,7 @@ mod tests {
 
                     if let Some((msg, parsed)) = msg {
                         if let Parsed::RoonState = parsed {
-                            RoonApi::save_config("roonstate", msg).unwrap();
+                            RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                         }
                     }
                 }

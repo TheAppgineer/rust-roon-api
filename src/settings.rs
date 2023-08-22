@@ -232,10 +232,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
+        const CONFIG_PATH: &str = "config.json";
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let get_settings = |cb: fn(Layout<MySettings>) -> Vec<RespProps>| -> Vec<RespProps> {
-            let settings = serde_json::from_value::<MySettings>(RoonApi::load_config("settings")).unwrap_or_default();
+            let settings = serde_json::from_value::<MySettings>(RoonApi::load_config(CONFIG_PATH, "settings")).unwrap_or_default();
             let layout = make_layout(settings);
 
             cb(layout)
@@ -263,7 +264,7 @@ mod tests {
         let services = vec![Services::Settings(settings)];
         let mut provided: HashMap<String, Svc> = HashMap::new();
         fn get_roon_state() -> serde_json::Value {
-            RoonApi::load_config("roonstate")
+            RoonApi::load_config(CONFIG_PATH, "roonstate")
         }
 
         provided.insert(settings::SVCNAME.to_owned(), svc);
@@ -286,10 +287,10 @@ mod tests {
                     if let Some((msg, parsed)) = msg {
                         match parsed {
                             Parsed::RoonState => {
-                                RoonApi::save_config("roonstate", msg).unwrap();
+                                RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                             }
                             Parsed::SettingsSaved(settings) => {
-                                RoonApi::save_config("settings", settings.to_owned()).unwrap();
+                                RoonApi::save_config(CONFIG_PATH, "settings", settings.to_owned()).unwrap();
 
                                 let settings = serde_json::from_value::<MySettings>(settings);
                                 println!("Settings saved: {:?}", settings);

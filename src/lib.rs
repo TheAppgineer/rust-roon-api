@@ -668,19 +668,19 @@ impl RoonApi {
         }
     }
 
-    pub fn save_config(key: &str, value: serde_json::Value) -> std::io::Result<()> {
-        let mut config = match Self::read_and_parse("config.json") {
+    pub fn save_config(path: &str, key: &str, value: serde_json::Value) -> std::io::Result<()> {
+        let mut config = match Self::read_and_parse(path) {
             Some(config) => config,
             None => json!({})
         };
 
         config[key] = value;
 
-        std::fs::write("config.json", serde_json::to_string_pretty(&config).unwrap())
+        std::fs::write(path, serde_json::to_string_pretty(&config).unwrap())
     }
 
-    pub fn load_config(key: &str) -> serde_json::Value {
-        match Self::read_and_parse("config.json") {
+    pub fn load_config(path: &str, key: &str) -> serde_json::Value {
+        match Self::read_and_parse(path) {
             Some(value) => {
                 match value.get(key) {
                     Some(value) => value.to_owned(),
@@ -867,6 +867,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
+        const CONFIG_PATH: &str = "config.json";
         let mut info = info!("com.theappgineer", "Rust Roon API");
 
         info.set_log_level(LogLevel::All);
@@ -874,7 +875,7 @@ mod tests {
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
         fn get_roon_state() -> serde_json::Value {
-            RoonApi::load_config("roonstate")
+            RoonApi::load_config(CONFIG_PATH, "roonstate")
         }
         let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided).await.unwrap();
 
@@ -893,7 +894,7 @@ mod tests {
 
                     if let Some((msg, parsed)) = msg {
                         if let Parsed::RoonState = parsed {
-                            RoonApi::save_config("roonstate", msg).unwrap();
+                            RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                         }
                     }
                 }
