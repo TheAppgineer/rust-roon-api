@@ -91,10 +91,11 @@ mod tests {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
-        fn get_roon_state() -> serde_json::Value {
+        let get_roon_state = || {
             RoonApi::load_config(CONFIG_PATH, "roonstate")
-        }
-        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided).await.unwrap();
+        };
+        let (mut handles, mut core_rx) = roon
+            .start_discovery(Box::new(get_roon_state), provided).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             loop {

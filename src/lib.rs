@@ -130,7 +130,7 @@ impl RoonApi {
 
     pub async fn start_discovery(
         &mut self,
-        get_roon_state: fn() -> serde_json::Value,
+        get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
         mut provided: HashMap<String, Svc>,
         #[cfg(all(any(feature = "status", feature = "settings"), not(any(feature = "transport", feature = "browse"))))]
         services: Option<Vec<Services>>,
@@ -874,10 +874,11 @@ mod tests {
 
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
-        fn get_roon_state() -> serde_json::Value {
+        let get_roon_state = || {
             RoonApi::load_config(CONFIG_PATH, "roonstate")
-        }
-        let (mut handles, mut core_rx) = roon.start_discovery(get_roon_state, provided).await.unwrap();
+        };
+        let (mut handles, mut core_rx) = roon
+            .start_discovery(Box::new(get_roon_state), provided).await.unwrap();
 
         handles.push(tokio::spawn(async move {
             loop {
