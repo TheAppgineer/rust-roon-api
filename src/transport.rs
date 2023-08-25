@@ -36,14 +36,14 @@ pub mod volume {
     #[derive(Clone, Debug, Deserialize)]
     pub struct Volume {
         #[serde(rename = "type")] pub scale: Scale,
-        pub min: Option<i8>,
-        pub max: Option<i8>,
-        pub value: Option<i8>,
-        pub step: Option<i8>,
+        pub min: Option<f32>,
+        pub max: Option<f32>,
+        pub value: Option<f32>,
+        pub step: Option<f32>,
         pub is_muted: Option<bool>,
-        pub hard_limit_min: i8,
-        pub hard_limit_max: i8,
-        pub soft_limit: i8,
+        pub hard_limit_min: f32,
+        pub hard_limit_max: f32,
+        pub soft_limit: f32,
     }
 }
 
