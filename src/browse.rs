@@ -1,3 +1,5 @@
+use std::{sync::Arc, collections::HashMap};
+use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{Moo, Parsed};
@@ -15,7 +17,7 @@ pub enum Hierarchy {
     Artists,
     Genres,
     Composers,
-    Search
+    Search,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,14 +27,14 @@ pub enum Action {
     Message,
     List,
     ReplaceItem,
-    RemoveItem
+    RemoveItem,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ListHint {
     #[serde(rename = "null")] None,
-    ActionList
+    ActionList,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +44,7 @@ pub enum ItemHint {
     Action,
     ActionList,
     List,
-    Header
+    Header,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -55,7 +57,7 @@ pub struct BrowseOpts {
     pub pop_all: bool,
     pub pop_levels: Option<u32>,
     pub refresh_list: bool,
-    pub set_display_offset: Option<usize>
+    pub set_display_offset: Option<usize>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -65,7 +67,7 @@ pub struct LoadOpts {
     pub level: Option<u32>,
     pub offset: usize,
     pub count: Option<usize>,
-    pub set_display_offset: usize
+    pub set_display_offset: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,7 +78,7 @@ pub struct List {
     pub subtitle: Option<String>,
     pub image_key: Option<String>,
     pub display_offset: Option<usize>,
-    pub hint: Option<ListHint>
+    pub hint: Option<ListHint>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -84,7 +86,7 @@ pub struct InputPrompt {
     pub prompt: String,
     pub action: String,
     pub value: Option<String>,
-    pub is_password: Option<bool>
+    pub is_password: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,7 +96,7 @@ pub struct Item {
     pub image_key: Option<String>,
     pub item_key: Option<String>,
     pub hint: Option<ItemHint>,
-    pub input_prompt: Option<InputPrompt>
+    pub input_prompt: Option<InputPrompt>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,25 +105,27 @@ pub struct BrowseResult {
     pub item: Option<Item>,
     pub list: Option<List>,
     pub message: Option<String>,
-    pub is_error: Option<bool>
+    pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LoadResult {
     pub items: Vec<Item>,
     pub offset: usize,
-    pub list: List
+    pub list: List,
 }
 
 #[derive(Clone, Debug)]
 pub struct Browse {
-    moo: Option<Moo>
+    moo: Option<Moo>,
+    session_keys: Arc<Mutex<HashMap<usize, String>>>,
 }
 
 impl Browse {
     pub fn new() -> Self {
         Self {
-            moo: None
+            moo: None,
+            session_keys: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -131,25 +135,49 @@ impl Browse {
 
     pub async fn browse(&self, opts: &BrowseOpts) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let multi_session_key = opts.multi_session_key.clone();
         let opts = serde_json::to_value(opts).ok();
+        let req = moo.send_req(SVCNAME.to_owned() + "/browse", opts).await.ok()?;
 
-        moo.send_req(SVCNAME.to_owned() + "/browse", opts).await.ok()
+        if let Some(multi_session_key) = multi_session_key {
+            let mut session_keys = self.session_keys.lock().await;
+
+            session_keys.insert(req, multi_session_key);
+        }
+
+        Some(req)
     }
 
     pub async fn load(&self, opts: &LoadOpts) -> Option<usize> {
         let moo = self.moo.as_ref()?;
+        let multi_session_key = opts.multi_session_key.clone();
         let opts = serde_json::to_value(opts).ok();
+        let req = moo.send_req(SVCNAME.to_owned() + "/load", opts).await.ok()?;
 
-        moo.send_req(SVCNAME.to_owned() + "/load", opts).await.ok()
+        if let Some(multi_session_key) = multi_session_key {
+            let mut session_keys = self.session_keys.lock().await;
+
+            session_keys.insert(req, multi_session_key);
+        }
+
+        Some(req)
     }
 
-    pub fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
+    pub async fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
+        let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
+
         if let Ok(body) = serde_json::from_value::<BrowseResult>(msg["body"].to_owned()) {
-            return Parsed::BrowseResult(body);
+            let mut session_keys = self.session_keys.lock().await;
+            let multi_session_key = session_keys.remove(&req_id);
+
+            return Parsed::BrowseResult(body, multi_session_key);
         }
 
         if let Ok(body) = serde_json::from_value::<LoadResult>(msg["body"].to_owned()) {
-            return Parsed::LoadResult(body);
+            let mut session_keys = self.session_keys.lock().await;
+            let multi_session_key = session_keys.remove(&req_id);
+
+            return Parsed::LoadResult(body, multi_session_key);
         }
 
         Parsed::None
@@ -254,6 +282,7 @@ mod tests {
                                 let opts = BrowseOpts {
                                     hierarchy: HIERARCHY,
                                     pop_all: true,
+                                    multi_session_key: Some("0".to_owned()),
                                     ..Default::default()
                                 };
 
@@ -272,7 +301,7 @@ mod tests {
                                 Parsed::RoonState => {
                                     RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                                 }
-                                Parsed::BrowseResult(result) => {
+                                Parsed::BrowseResult(result, multi_session_key) => {
                                     match result.action {
                                         Action::List => {
                                             if let Some(list) = result.list {
@@ -287,6 +316,7 @@ mod tests {
                                                     count: Some(PAGE_ITEM_COUNT),
                                                     offset,
                                                     set_display_offset: offset,
+                                                    multi_session_key,
                                                     ..Default::default()
                                                 };
 
@@ -301,9 +331,12 @@ mod tests {
                                         _ => ()
                                     }
                                 }
-                                Parsed::LoadResult(result) => {
+                                Parsed::LoadResult(result, multi_session_key) => {
                                     if let Some(input) = display_page(&result).await {
-                                        let mut opts: BrowseOpts = Default::default();
+                                        let mut opts = BrowseOpts {
+                                            multi_session_key,
+                                            ..Default::default()
+                                        };
 
                                         match input {
                                             Input::Item(item_key) => {

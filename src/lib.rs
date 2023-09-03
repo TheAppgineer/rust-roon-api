@@ -552,7 +552,7 @@ impl RoonApi {
                                             }
                                             #[cfg(feature = "browse")]
                                             Services::Browse(browse) => {
-                                                let parsed = browse.parse_msg(&msg);
+                                                let parsed = browse.parse_msg(&msg).await;
 
                                                 match parsed {
                                                     Parsed::None => (),
@@ -772,8 +772,8 @@ pub enum Parsed {
     #[cfg(feature = "transport")] OutputsRemoved(Vec<String>),
     #[cfg(feature = "transport")] Queue(Vec<transport::QueueItem>),
     #[cfg(feature = "transport")] QueueChanges(Vec<transport::QueueChange>),
-    #[cfg(feature = "browse")]    BrowseResult(browse::BrowseResult),
-    #[cfg(feature = "browse")]    LoadResult(browse::LoadResult),
+    #[cfg(feature = "browse")]    BrowseResult(browse::BrowseResult, Option<String>),
+    #[cfg(feature = "browse")]    LoadResult(browse::LoadResult, Option<String>),
 }
 
 #[derive(Serialize)]
