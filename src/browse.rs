@@ -6,7 +6,7 @@ use crate::{Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.browse:1";
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Hierarchy {
     #[default] Browse,
@@ -20,7 +20,7 @@ pub enum Hierarchy {
     Search,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     None,
@@ -30,14 +30,14 @@ pub enum Action {
     RemoveItem,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ListHint {
     #[serde(rename = "null")] None,
     ActionList,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemHint {
     #[serde(rename = "null")] None,
@@ -47,7 +47,7 @@ pub enum ItemHint {
     Header,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct BrowseOpts {
     pub hierarchy: Hierarchy,
     pub multi_session_key: Option<String>,
@@ -60,7 +60,7 @@ pub struct BrowseOpts {
     pub set_display_offset: Option<usize>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct LoadOpts {
     pub hierarchy: Hierarchy,
     pub multi_session_key: Option<String>,
@@ -70,7 +70,7 @@ pub struct LoadOpts {
     pub set_display_offset: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct List {
     pub title: String,
     pub count: usize,
@@ -89,7 +89,7 @@ pub struct InputPrompt {
     pub is_password: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Item {
     pub title: String,
     pub subtitle: Option<String>,
@@ -99,7 +99,7 @@ pub struct Item {
     pub input_prompt: Option<InputPrompt>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct BrowseResult {
     pub action: Action,
     pub item: Option<Item>,
@@ -108,7 +108,7 @@ pub struct BrowseResult {
     pub is_error: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct LoadResult {
     pub items: Vec<Item>,
     pub offset: usize,
