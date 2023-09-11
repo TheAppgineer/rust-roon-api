@@ -6,20 +6,6 @@ use crate::{Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.browse:1";
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Hierarchy {
-    #[default] Browse,
-    Playlists,
-    Settings,
-    InternetRadio,
-    Albums,
-    Artists,
-    Genres,
-    Composers,
-    Search,
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -49,7 +35,6 @@ pub enum ItemHint {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct BrowseOpts {
-    pub hierarchy: Hierarchy,
     pub multi_session_key: Option<String>,
     pub item_key: Option<String>,
     pub input: Option<String>,
@@ -62,7 +47,6 @@ pub struct BrowseOpts {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct LoadOpts {
-    pub hierarchy: Hierarchy,
     pub multi_session_key: Option<String>,
     pub level: Option<u32>,
     pub offset: usize,
@@ -136,8 +120,11 @@ impl Browse {
     pub async fn browse(&self, opts: &BrowseOpts) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let multi_session_key = opts.multi_session_key.clone();
-        let opts = serde_json::to_value(opts).ok();
-        let req = moo.send_req(SVCNAME.to_owned() + "/browse", opts).await.ok()?;
+        let mut opts = serde_json::to_value(opts).ok()?;
+
+        opts["hierarchy"] = "browse".into();
+
+        let req = moo.send_req(SVCNAME.to_owned() + "/browse", Some(opts)).await.ok()?;
 
         if let Some(multi_session_key) = multi_session_key {
             let mut session_keys = self.session_keys.lock().await;
@@ -151,8 +138,11 @@ impl Browse {
     pub async fn load(&self, opts: &LoadOpts) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let multi_session_key = opts.multi_session_key.clone();
-        let opts = serde_json::to_value(opts).ok();
-        let req = moo.send_req(SVCNAME.to_owned() + "/load", opts).await.ok()?;
+        let mut opts = serde_json::to_value(opts).ok()?;
+
+        opts["hierarchy"] = "browse".into();
+
+        let req = moo.send_req(SVCNAME.to_owned() + "/load", Some(opts)).await.ok()?;
 
         if let Some(multi_session_key) = multi_session_key {
             let mut session_keys = self.session_keys.lock().await;
@@ -266,7 +256,6 @@ mod tests {
             .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
 
         handles.push(tokio::spawn(async move {
-            const HIERARCHY: Hierarchy = Hierarchy::Browse;
             const PAGE_ITEM_COUNT: usize = 8;
             let mut browse = None;
 
@@ -280,7 +269,6 @@ mod tests {
 
                             if let Some(browse) = browse.as_ref() {
                                 let opts = BrowseOpts {
-                                    hierarchy: HIERARCHY,
                                     pop_all: true,
                                     multi_session_key: Some("0".to_owned()),
                                     ..Default::default()
