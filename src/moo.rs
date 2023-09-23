@@ -80,6 +80,7 @@ pub struct MooSender {
     quiet_reqs: Arc<Mutex<Vec<usize>>>
 }
 
+#[derive(Debug)]
 pub struct MooReceiver {
     pub id: usize,
     read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -267,7 +268,7 @@ impl MooReceiver {
                                                       req_id,
                                                       msg["name"].as_str().unwrap());
                             }
-        
+
                             if msg["content_length"].is_null() {
                                 println!("");
                             } else {
@@ -310,7 +311,7 @@ impl MooReceiver {
                         let request_regex = Regex::new(r"([^/]+)/(.*)").unwrap();
                         let request = matches.get(3)?.as_str();
                         let matches = request_regex.captures(request)?;
-            
+
                         json["service"] = matches.get(1)?.as_str().into();
                         json["name"] = matches.get(2)?.as_str().into();
                     } else {
