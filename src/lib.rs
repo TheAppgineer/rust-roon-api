@@ -14,8 +14,6 @@ use tokio::time::{sleep, Duration};
 pub mod moo;
 mod sood;
 
-pub use moo::LogLevel;
-
 #[cfg(feature = "status")]    pub mod status;
 #[cfg(feature = "settings")]  pub mod settings;
 #[cfg(feature = "pairing")]   pub mod pairing;
@@ -29,7 +27,6 @@ type Method = Box<dyn Fn(Option<&Core>, Option<&serde_json::Value>) -> Vec<RespP
 
 pub struct RoonApi {
     reg_info: serde_json::Value,
-    log_level: Arc<LogLevel>,
     sood_conns: Arc<tokio::sync::Mutex<Vec<String>>>,
     #[cfg(feature = "pairing")]
     lost_core_id: Arc<Mutex<Option<String>>>,
@@ -122,7 +119,6 @@ impl RoonApi {
 
         Self {
             reg_info,
-            log_level: Arc::new(info.log_level),
             sood_conns: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             #[cfg(feature = "pairing")]
             lost_core_id: Arc::new(Mutex::new(None)),
@@ -140,10 +136,9 @@ impl RoonApi {
         ip: &IpAddr,
         port: &str,
     ) -> Option<(Vec<JoinHandle<()>>, Receiver<(CoreEvent, Option<(serde_json::Value, Parsed)>)>)> {
-        let log_level = self.log_level.clone();
         let (moo_tx, moo_rx) = mpsc::channel::<(Moo, MooSender, MooReceiver)>(4);
 
-        match Moo::new(&ip, &port, log_level).await {
+        match Moo::new(&ip, &port).await {
             Ok(moo_tuple) => {
                 #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
                 let (moo_handle, core_rx) = self.start_moo_receiver(get_roon_state, provided, services, moo_rx);
@@ -193,14 +188,14 @@ impl RoonApi {
 
                         if let None = paired_core {
                             if let Err(err) = sood.query(&QUERY).await {
-                                println!("{}", err);
+                                log::error!("{}", err);
                             }
                         }
                     }
 
                     #[cfg(not(feature = "pairing"))]
                     if let Err(err) = sood.query(&QUERY).await {
-                        println!("{}", err);
+                        log::error!("{}", err);
                     }
                 }
 
@@ -211,7 +206,6 @@ impl RoonApi {
         };
 
         let sood_conns = self.sood_conns.clone();
-        let log_level = self.log_level.clone();
         let sood_receive = async move {
             fn is_service_response(service_id: &str, msg: &mut Message) -> Option<(String, String)> {
                 let svc_id = msg.props.remove("service_id")?;
@@ -233,7 +227,7 @@ impl RoonApi {
                         if !sood_conns.contains(&unique_id) {
                             sood_conns.push(unique_id.to_owned());
 
-                            if let Ok(moo_tuple) = Moo::new(&msg.ip, &port, log_level.clone()).await {
+                            if let Ok(moo_tuple) = Moo::new(&msg.ip, &port).await {
                                 moo_tx.send(moo_tuple).await.unwrap();
                             }
                         }
@@ -523,7 +517,7 @@ impl RoonApi {
                                                         break;
                                                     }
                                                 } else {
-                                                    println!("Failed to parse message: {}", msg);
+                                                    log::warn!("Failed to parse message: {}", msg);
 
                                                     core_tx.send((CoreEvent::None, Some((msg, Parsed::None)))).await.unwrap();
                                                     break;
@@ -803,7 +797,6 @@ pub struct Info {
     publisher: Option<&'static str>,
     email: &'static str,
     website: Option<&'static str>,
-    log_level: LogLevel
 }
 
 #[macro_export]
@@ -870,12 +863,7 @@ impl Info {
             publisher,
             email,
             website,
-            log_level: LogLevel::Default
         }
-    }
-
-    pub fn set_log_level(&mut self, log_level: LogLevel) {
-        self.log_level = log_level;
     }
 }
 
@@ -887,10 +875,11 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         const CONFIG_PATH: &str = "config.json";
-        let mut info = info!("com.theappgineer", "Rust Roon API");
+        let log_file = concat!(env!("CARGO_PKG_NAME"), ".log");
 
-        info.set_log_level(LogLevel::All);
+        simple_logging::log_to_file(log_file, log::LevelFilter::Debug).unwrap();
 
+        let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
         let get_roon_state = || {
@@ -904,10 +893,10 @@ mod tests {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(core) => {
-                            println!("Core found: {}, version {}", core.display_name, core.display_version);
+                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
                         }
                         CoreEvent::Lost(core) => {
-                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                            log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
                     }

@@ -559,6 +559,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         const CONFIG_PATH: &str = "config.json";
+
+        simple_logging::log_to_stderr(log::LevelFilter::Info);
+
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Transport(Transport::new())];
@@ -576,7 +579,7 @@ mod tests {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(mut core) => {
-                            println!("Core found: {}, version {}", core.display_name, core.display_version);
+                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
 
                             transport = core.get_transport().cloned();
 
@@ -586,7 +589,7 @@ mod tests {
                             }
                         }
                         CoreEvent::Lost(core) => {
-                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                            log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
                     }

@@ -233,6 +233,9 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         const CONFIG_PATH: &str = "config.json";
+
+        simple_logging::log_to_stderr(log::LevelFilter::Info);
+
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let get_settings = |cb: fn(Layout<MySettings>) -> Vec<RespProps>| -> Vec<RespProps> {
@@ -277,10 +280,10 @@ mod tests {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(core) => {
-                            println!("Core found: {}, version {}", core.display_name, core.display_version);
+                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
                         }
                         CoreEvent::Lost(core) => {
-                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                            log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
                     }
@@ -294,7 +297,7 @@ mod tests {
                                 RoonApi::save_config(CONFIG_PATH, "settings", settings.to_owned()).unwrap();
 
                                 let settings = serde_json::from_value::<MySettings>(settings);
-                                println!("Settings saved: {:?}", settings);
+                                log::info!("Settings saved: {:?}", settings);
                             }
                             _ => ()
                         }

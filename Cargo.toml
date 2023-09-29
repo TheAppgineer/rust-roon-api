@@ -1,6 +1,6 @@
 [package]
 name = "roon-api"
-version = "0.0.7"
+version = "0.1.0"
 authors = ["The Appgineer"]
 license-file = "LICENSE"
 readme = "README.md"
@@ -20,6 +20,10 @@ url = "2.2.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 regex = "1.5.5"
+log = "0.4"
+
+[dev-dependencies]
+simple-logging = "2.0"
 
 [features]
 pairing = []

@@ -181,7 +181,7 @@ mod tests {
     use tokio::io::{self, AsyncBufReadExt};
 
     use super::*;
-    use crate::{RoonApi, CoreEvent, Info, LogLevel, Svc, Services, info};
+    use crate::{RoonApi, CoreEvent, Info, Svc, Services, info};
 
     enum Input {
         Item(String),
@@ -242,10 +242,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         const CONFIG_PATH: &str = "config.json";
-        let mut info = info!("com.theappgineer", "Rust Roon API");
-
-        info.set_log_level(LogLevel::None);
-
+        let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Browse(Browse::new())];
         let provided: HashMap<String, Svc> = HashMap::new();
@@ -263,7 +260,7 @@ mod tests {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(mut core) => {
-                            println!("Core found: {}, version {}", core.display_name, core.display_version);
+                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
 
                             browse = core.get_browse().cloned();
 
@@ -278,7 +275,7 @@ mod tests {
                             }
                         }
                         CoreEvent::Lost(core) => {
-                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                            log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
                     }

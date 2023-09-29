@@ -114,6 +114,9 @@ mod tests {
     async fn it_works() {
         const CONFIG_PATH: &str = "config.json";
         let info = info!("com.theappgineer", "Rust Roon API");
+
+        simple_logging::log_to_stderr(log::LevelFilter::Info);
+
         let mut roon = RoonApi::new(info);
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];
@@ -139,7 +142,7 @@ mod tests {
                             };
                         }
                         CoreEvent::Lost(core) => {
-                            println!("Core lost: {}, version {}", core.display_name, core.display_version);
+                            log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
                         }
                         _ => ()
                     }

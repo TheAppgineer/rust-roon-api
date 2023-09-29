@@ -59,53 +59,53 @@ impl Sood {
                     match unicast.lock().await.send_sock.try_recv_from(&mut buf) {
                         Ok((size, from)) => {
                             let buf = &buf[..size];
-    
+
                             if let Some(msg)= Message::new(buf, from) {
                                 if let Err(err) = tx.send(msg).await {
-                                    println!("{}", err);
+                                    log::error!("{}", err);
                                 }
                             }
                         }
                         Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
                         }
                         Err(err) => {
-                            println!("{}", err);
+                            log::error!("{}", err);
                         }
                     }
                 }
-    
+
                 for (_, mc) in &*multicast.lock().await {
                     match mc.send_sock.try_recv_from(&mut buf) {
                         Ok((size, from)) => {
                             let buf = &buf[..size];
-    
+
                             if let Some(msg)= Message::new(buf, from) {
                                 if let Err(err) = tx.send(msg).await{
-                                    println!("{}", err);
+                                    log::error!("{}", err);
                                 }
                             }
                         }
                         Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
                         }
                         Err(err) => {
-                            println!("{}", err);
+                            log::error!("{}", err);
                         }
                     }
-    
+
                     match mc.recv_sock.try_recv_from(&mut buf) {
                         Ok((size, from)) => {
                             let buf = &buf[..size];
-    
+
                             if let Some(msg)= Message::new(buf, from) {
                                 if let Err(err) = tx.send(msg).await{
-                                    println!("{}", err);
+                                    log::error!("{}", err);
                                 }
                             }
                         }
                         Err(ref err) if err.kind() == ErrorKind::WouldBlock => {
                         }
                         Err(err) => {
-                            println!("{}", err);
+                            log::error!("{}", err);
                         }
                     }
                 }
@@ -128,7 +128,7 @@ impl Sood {
             vec.push((value.len() >> 8) as u8);
             vec.push((value.len() & 0xFF) as u8);
             vec = [vec, Vec::from(*value)].concat();
-    
+
             if *key == TID {
                 has_tid = true;
             }

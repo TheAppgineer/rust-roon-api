@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use futures_util::stream::{StreamExt, SplitSink, SplitStream};
 use futures_util::SinkExt;
 use regex::Regex;
-use serde::Serialize;
 use serde_json::json;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Receiver, Sender, error::SendError};
@@ -53,21 +52,12 @@ macro_rules! send_complete_all {
     };
 }
 
-#[derive(Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    None,
-    Default,
-    All
-}
-
 #[derive(Clone, Debug)]
 pub struct Moo {
     pub id: usize,
     pub req_id: Arc<Mutex<usize>>,
     msg_tx: Sender<(usize, String)>,
     sub_key: Arc<Mutex<usize>>,
-    log_level: Arc<LogLevel>,
 }
 
 #[derive(Debug)]
@@ -76,7 +66,6 @@ pub struct MooSender {
     pub req_id: Arc<Mutex<usize>>,
     pub msg_rx: Receiver<(usize, String)>,
     write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
-    log_level: Arc<LogLevel>,
     quiet_reqs: Arc<Mutex<Vec<usize>>>
 }
 
@@ -84,12 +73,11 @@ pub struct MooSender {
 pub struct MooReceiver {
     pub id: usize,
     read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-    log_level: Arc<LogLevel>,
     quiet_reqs: Arc<Mutex<Vec<usize>>>
 }
 
 impl Moo {
-    pub async fn new(ip: &IpAddr, port: &str, log_level: Arc<LogLevel>) -> Result<(Moo, MooSender, MooReceiver), Error> {
+    pub async fn new(ip: &IpAddr, port: &str) -> Result<(Moo, MooSender, MooReceiver), Error> {
         let id = MOO_COUNT.fetch_add(1, Ordering::Relaxed);
         let url = Url::parse(&format!("ws://{}:{}/api", ip, port)).unwrap();
         let req_id = Arc::new(Mutex::new(0));
@@ -105,7 +93,6 @@ impl Moo {
             req_id: req_id_clone,
             msg_tx,
             sub_key: Arc::new(Mutex::new(0)),
-            log_level: log_level.clone()
         };
 
         let sender = MooSender {
@@ -113,15 +100,13 @@ impl Moo {
             req_id,
             msg_rx,
             write,
-            log_level: log_level.clone(),
-            quiet_reqs: quiet_reqs.clone()
+            quiet_reqs: quiet_reqs.clone(),
         };
 
         let receiver = MooReceiver {
             id,
             read,
-            log_level,
-            quiet_reqs
+            quiet_reqs,
         };
 
         Ok((moo, sender, receiver))
@@ -133,9 +118,7 @@ impl Moo {
 
         self.msg_tx.send((req_id, msg_string)).await?;
 
-        if *self.log_level != LogLevel::None {
-            println!("{}", log_string);
-        }
+        log::info!("{}", log_string);
 
         let mut next_req_id = self.req_id.lock().unwrap();
         *next_req_id += 1;
@@ -174,9 +157,7 @@ impl Moo {
     pub async fn send_msg_string(&self, req_id: usize, msg_string: (String, String)) -> Result<(), SendError<(usize, String)>> {
         self.msg_tx.send((req_id, msg_string.0)).await?;
 
-        if *self.log_level != LogLevel::None {
-            println!("{}", msg_string.1);
-        }
+        log::info!("{}", msg_string.1);
 
         Ok(())
     }
@@ -220,8 +201,10 @@ impl MooSender {
             let mut quiet_reqs = self.quiet_reqs.lock().unwrap();
             let quiet = quiet_reqs.iter().position(|id| *id == req_id);
 
-            if *self.log_level == LogLevel::All || (*self.log_level == LogLevel::Default && quiet.is_none()) {
-                println!("{}", log_string);
+            if quiet.is_none() {
+                log::info!("{}", log_string);
+            } else {
+                log::debug!("{}", log_string);
             }
 
             let verb = hdr[0];
@@ -256,28 +239,33 @@ impl MooReceiver {
                     if let Some(msg) = Self::parse(&data) {
                         let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
                         let quiet = msg["headers"]["Logging"] == "quiet";
-
-                        if *self.log_level == LogLevel::All || (*self.log_level == LogLevel::Default && !quiet) {
-                            if msg["verb"] == "REQUEST" {
-                                print!("<- {} {} {}/{}", msg["verb"].as_str().unwrap(),
-                                                         req_id,
-                                                         msg["service"].as_str().unwrap(),
-                                                         msg["name"].as_str().unwrap());
-                            } else {
-                                print!("<- {} {} {}", msg["verb"].as_str().unwrap(),
+                        let header = if msg["verb"] == "REQUEST" {
+                            format!("<- {} {} {}/{}", msg["verb"].as_str().unwrap(),
                                                       req_id,
-                                                      msg["name"].as_str().unwrap());
-                            }
+                                                      msg["service"].as_str().unwrap(),
+                                                      msg["name"].as_str().unwrap())
+                        } else {
+                            format!("<- {} {} {}", msg["verb"].as_str().unwrap(),
+                                                   req_id,
+                                                   msg["name"].as_str().unwrap())
+                        };
 
-                            if msg["content_length"].is_null() {
-                                println!("");
-                            } else {
-                                println!(" {}", msg["body"].to_string());
-                            }
-                        } else if quiet {
+                        if quiet {
                             let mut quiet_reqs = self.quiet_reqs.lock().unwrap();
 
                             quiet_reqs.push(req_id);
+
+                            if msg["content_length"].is_null() {
+                                log::debug!("{}", header);
+                            } else {
+                                log::debug!("{} {}", header, msg["body"].to_string());
+                            }
+                        } else {
+                            if msg["content_length"].is_null() {
+                                log::info!("{}", header);
+                            } else {
+                                log::info!("{} {}", header, msg["body"].to_string());
+                            }
                         }
 
                         return Ok(msg)
