@@ -231,7 +231,12 @@ impl MooSender {
 
 impl MooReceiver {
     pub async fn receive_response(&mut self) -> Result<serde_json::Value, Error> {
-        match self.read.next().await {
+        let timeout = std::time::Duration::from_secs(10);
+        let result = tokio::time::timeout(timeout, self.read.next())
+            .await
+            .map_err(|_| Error::ConnectionClosed)?;
+
+        match result {
             Some(msg) => {
                 let msg = msg?;
 

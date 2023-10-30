@@ -252,7 +252,7 @@ mod tests {
         let (mut handles, mut core_rx) = roon
             .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
 
-        handles.push(tokio::spawn(async move {
+        handles.spawn(async move {
             const PAGE_ITEM_COUNT: usize = 8;
             let mut browse = None;
 
@@ -350,10 +350,8 @@ mod tests {
                     }
                 }
             }
-        }));
+        });
 
-        for handle in handles {
-            handle.await.unwrap();
-        }
+        handles.join_next().await;
     }
 }

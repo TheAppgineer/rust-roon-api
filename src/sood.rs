@@ -3,9 +3,9 @@ use std::io::ErrorKind;
 use std::collections::HashMap;
 use std::str::from_utf8;
 use std::sync::Arc;
+use futures_util::Future;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc::{self, Receiver}, Mutex};
-use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
@@ -44,17 +44,17 @@ impl Sood {
         }
     }
 
-    pub async fn start(&mut self) -> std::io::Result<(JoinHandle<()>, Receiver<Message>)> {
+    pub async fn start(&mut self) -> std::io::Result<(impl Future<Output = ()>, Receiver<Message>)> {
         self.init_socket().await?;
 
         let unicast = self.unicast.clone();
         let multicast = self.multicast.clone();
         let (tx, rx) = mpsc::channel::<Message>(4);
 
-        let handle = tokio::spawn(async move {
+        let handle = async move {
             let mut buf = [0u8; 1024];
 
-            loop {
+            'sood: loop {
                 if let Some(unicast) = &unicast {
                     match unicast.lock().await.send_sock.try_recv_from(&mut buf) {
                         Ok((size, from)) => {
@@ -63,6 +63,7 @@ impl Sood {
                             if let Some(msg)= Message::new(buf, from) {
                                 if let Err(err) = tx.send(msg).await {
                                     log::error!("{}", err);
+                                    break 'sood;
                                 }
                             }
                         }
@@ -70,6 +71,7 @@ impl Sood {
                         }
                         Err(err) => {
                             log::error!("{}", err);
+                            break 'sood;
                         }
                     }
                 }
@@ -82,6 +84,7 @@ impl Sood {
                             if let Some(msg)= Message::new(buf, from) {
                                 if let Err(err) = tx.send(msg).await{
                                     log::error!("{}", err);
+                                    break 'sood;
                                 }
                             }
                         }
@@ -89,6 +92,7 @@ impl Sood {
                         }
                         Err(err) => {
                             log::error!("{}", err);
+                            break 'sood;
                         }
                     }
 
@@ -99,6 +103,7 @@ impl Sood {
                             if let Some(msg)= Message::new(buf, from) {
                                 if let Err(err) = tx.send(msg).await{
                                     log::error!("{}", err);
+                                    break 'sood;
                                 }
                             }
                         }
@@ -106,13 +111,14 @@ impl Sood {
                         }
                         Err(err) => {
                             log::error!("{}", err);
+                            break 'sood;
                         }
                     }
                 }
 
                 sleep(Duration::from_millis(10)).await;
             }
-        });
+        };
 
         Ok((handle, rx))
     }

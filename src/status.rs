@@ -130,7 +130,7 @@ mod tests {
         let (mut handles, mut core_rx) = roon
             .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
 
-        handles.push(tokio::spawn(async move {
+        handles.spawn(async move {
             loop {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
@@ -154,10 +154,8 @@ mod tests {
                     }
                 }
             }
-        }));
+        });
 
-        for handle in handles {
-            handle.await.unwrap();
-        }
+        handles.join_next().await;
     }
 }
