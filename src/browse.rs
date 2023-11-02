@@ -242,6 +242,10 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
         const CONFIG_PATH: &str = "config.json";
+        const LOG_FILE: &str = concat!(env!("CARGO_PKG_NAME"), ".log");
+
+        simple_logging::log_to_file(LOG_FILE, log::LevelFilter::Info).unwrap();
+
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Browse(Browse::new())];

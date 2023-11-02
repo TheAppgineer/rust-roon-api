@@ -286,6 +286,12 @@ impl RoonApi {
 
         #[cfg(feature = "pairing")]
         {
+            let mut lost_core_id = self.lost_core_id.lock().unwrap();
+            let mut paired_core = self.paired_core.lock().unwrap();
+
+            *lost_core_id = None;
+            *paired_core = None;
+
             let lost_core_id = self.lost_core_id.clone();
             let on_core_lost = move |core_id: String| {
                 let mut lost_core_id = lost_core_id.lock().unwrap();
