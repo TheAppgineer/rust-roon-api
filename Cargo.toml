@@ -1,6 +1,6 @@
 [package]
 name = "roon-api"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["The Appgineer"]
 license-file = "LICENSE"
 readme = "README.md"
@@ -13,8 +13,8 @@ publish = false
 [dependencies]
 futures-util = "0.3"
 tokio = { version = "1.24.1", features = ["io-std", "macros", "rt", "sync", "time"] }
-tokio-tungstenite = "0.20.0"
-if-addrs = "0.10.1"
+tokio-tungstenite = "0.21.0"
+if-addrs = "0.11.0"
 uuid = { version = "1.2.2", features = ["v4"] }
 url = "2.2.2"
 serde = { version = "1.0", features = ["derive"] }
