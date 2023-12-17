@@ -121,7 +121,7 @@ pub struct Output {
     pub can_group_with_output_ids: Vec<String>,
     pub display_name: String,
     pub volume: Option<volume::Volume>,
-    pub source_controls: Vec<SourceControls>,
+    pub source_controls: Option<Vec<SourceControls>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
