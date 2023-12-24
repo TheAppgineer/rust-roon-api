@@ -4,7 +4,18 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{RoonApi, Core, Parsed, RespProps, Sub, Svc, SvcSpec, send_complete, send_continue};
+use crate::{
+    RoonApi,
+    Core,
+    Parsed,
+    RespProps,
+    Sub,
+    Svc,
+    SvcSpec,
+    send_complete,
+    send_continue,
+    send_continue_all,
+};
 
 pub const SVCNAME: &str = "com.roonlabs.settings:1";
 
@@ -83,7 +94,7 @@ pub struct OutputSetting {
 
 #[derive(Serialize)]
 pub struct Layout<T>
-where T: serde::ser::Serialize
+where T: serde::ser::Serialize + serde::de::DeserializeOwned
 {
     #[serde(rename = "values")] pub settings: T,
     #[serde(rename = "layout")] pub widgets: Vec<Widget>,
@@ -99,9 +110,9 @@ impl Settings {
     pub fn new<T, U>(
         roon: &RoonApi,
         get_settings_cb: Box<dyn Fn(fn(Layout<T>) -> Vec<RespProps>) -> Vec<RespProps> + Send>,
-        save_settings_cb: Box<dyn Fn(bool, U) -> Vec<RespProps> + Send>
+        save_settings_cb: Box<dyn Fn(U) -> Layout<T> + Send>
     ) -> (Svc, Self)
-    where T: serde::ser::Serialize + 'static,
+    where T: serde::ser::Serialize + serde::de::DeserializeOwned + 'static,
           U: serde::de::DeserializeOwned + 'static
     {
         let mut spec = SvcSpec::new(SVCNAME);
@@ -130,7 +141,24 @@ impl Settings {
                     *save_req_id = Some(req["request_id"].as_str().unwrap().parse::<usize>().unwrap());
                 }
 
-                save_settings_cb(is_dry_run, serde_json::from_value::<U>(settings["values"].to_owned()).unwrap())
+                let layout = save_settings_cb(
+                    serde_json::from_value::<U>(settings["values"].to_owned()).unwrap(),
+                );
+                let has_error = layout.has_error;
+                let layout = layout.serialize(serde_json::value::Serializer).unwrap();
+                let mut resp_props: Vec<RespProps> = Vec::new();
+
+                if has_error {
+                    send_complete!(resp_props, "NotValid", Some(json!({"settings": layout})));
+                } else {
+                    send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
+
+                    if !is_dry_run {
+                        send_continue_all!(resp_props, "subscribe_settings", "Changed", Some(json!({"settings": layout})));
+                    }
+                }
+
+                resp_props
             } else {
                 vec![(&[], None)]
             }
@@ -179,7 +207,7 @@ impl Settings {
 #[cfg(test)]
 #[cfg(feature = "settings")]
 mod tests {
-    use crate::{settings, CoreEvent, Info, Services, info, send_continue_all};
+    use crate::{settings, CoreEvent, Info, Services, info};
 
     use super::*;
 
@@ -239,39 +267,22 @@ mod tests {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let get_settings = |cb: fn(Layout<MySettings>) -> Vec<RespProps>| -> Vec<RespProps> {
-            let settings = serde_json::from_value::<MySettings>(RoonApi::load_config(CONFIG_PATH, "settings")).unwrap_or_default();
-            let layout = make_layout(settings);
+            let value = RoonApi::load_config(CONFIG_PATH, "settings");
+            let settings = serde_json::from_value(value).unwrap_or_default();
 
-            cb(layout)
+            cb(make_layout(settings))
         };
-        let save_settings = |is_dry_run: bool, settings: MySettings| -> Vec<RespProps> {
-            let mut resp_props: Vec<RespProps> = Vec::new();
-
-            let layout = make_layout(settings);
-            let has_error = layout.has_error;
-            let layout = layout.serialize(serde_json::value::Serializer).unwrap();
-
-            if has_error {
-                send_complete!(resp_props, "NotValid", Some(json!({"settings": layout})));
-            } else {
-                send_complete!(resp_props, "Success", Some(json!({"settings": layout})));
-
-                if !is_dry_run {
-                    send_continue_all!(resp_props, "subscribe_settings", "Changed", Some(json!({"settings": layout})));
-                }
-            }
-
-            resp_props
+        let save_settings = |settings: MySettings| -> Layout<MySettings> {
+            make_layout(settings)
         };
         let (svc, settings) = Settings::new(&roon, Box::new(get_settings), Box::new(save_settings));
         let services = vec![Services::Settings(settings)];
-        let mut provided: HashMap<String, Svc> = HashMap::new();
+        let provided: HashMap<String, Svc> = HashMap::from([
+            (settings::SVCNAME.to_owned(), svc),
+        ]);
         let get_roon_state = || {
             RoonApi::load_config(CONFIG_PATH, "roonstate")
         };
-
-        provided.insert(settings::SVCNAME.to_owned(), svc);
-
         let (mut handles, mut core_rx) = roon
             .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
 
