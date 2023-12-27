@@ -1,8 +1,7 @@
-use std::collections::HashMap;
 use std::num::ParseIntError;
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
     RoonApi,
@@ -19,12 +18,17 @@ use crate::{
 
 pub const SVCNAME: &str = "com.roonlabs.settings:1";
 
+#[typetag::serde(tag = "type")]
+pub trait SerTrait {}
+
+pub type BoxedSerTrait = Box<dyn SerTrait>;
+
 #[derive(Serialize)]
 pub struct Dropdown {
     pub title: &'static str,
     pub subtitle: Option<String>,
-    pub values: Vec<HashMap<&'static str, Value>>,
-    pub setting: &'static str
+    pub values: Vec<BoxedSerTrait>,
+    pub setting: &'static str,
 }
 
 #[derive(Serialize)]
@@ -32,7 +36,7 @@ pub struct Group {
     pub title: &'static str,
     pub subtitle: Option<String>,
     pub collapsable: bool,
-    pub items: Vec<Widget>
+    pub items: Vec<Widget>,
 }
 
 #[derive(Serialize)]
@@ -42,7 +46,7 @@ pub struct Integer {
     pub min: String,
     pub max: String,
     pub setting: &'static str,
-    pub error: Option<String>
+    pub error: Option<String>,
 }
 
 impl Integer {
@@ -58,21 +62,21 @@ impl Integer {
 #[derive(Serialize)]
 pub struct Label {
     pub title: String,
-    pub subtitle: Option<String>
+    pub subtitle: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct OutputDropdown {
     pub title: &'static str,
     pub subtitle: Option<String>,
-    pub setting: &'static str
+    pub setting: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct Textbox {
     pub title: &'static str,
     pub subtitle: Option<String>,
-    pub setting: &'static str
+    pub setting: &'static str,
 }
 
 #[derive(Serialize)]
@@ -83,37 +87,37 @@ pub enum Widget {
     Integer(Integer),
     Label(Label),
     #[serde(rename = "zone")] OutputDropdown(OutputDropdown),
-    #[serde(rename = "string")] Textbox(Textbox)
+    #[serde(rename = "string")] Textbox(Textbox),
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct OutputSetting {
     pub name: String,
-    pub output_id: String
+    pub output_id: String,
 }
 
 #[derive(Serialize)]
 pub struct Layout<T>
-where T: serde::ser::Serialize + serde::de::DeserializeOwned
+where T: serde::ser::Serialize + serde::de::DeserializeOwned,
 {
     #[serde(rename = "values")] pub settings: T,
     #[serde(rename = "layout")] pub widgets: Vec<Widget>,
-    pub has_error: bool
+    pub has_error: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct Settings {
-    save_req_id: Arc<Mutex<Option<usize>>>
+    save_req_id: Arc<Mutex<Option<usize>>>,
 }
 
 impl Settings {
     pub fn new<T, U>(
         roon: &RoonApi,
         get_settings_cb: Box<dyn Fn(fn(Layout<T>) -> Vec<RespProps>) -> Vec<RespProps> + Send>,
-        save_settings_cb: Box<dyn Fn(U) -> Layout<T> + Send>
+        save_settings_cb: Box<dyn Fn(U) -> Layout<T> + Send>,
     ) -> (Svc, Self)
     where T: serde::ser::Serialize + serde::de::DeserializeOwned + 'static,
-          U: serde::de::DeserializeOwned + 'static
+          U: serde::de::DeserializeOwned + 'static,
     {
         let mut spec = SvcSpec::new(SVCNAME);
         let save_req_id = Arc::new(Mutex::new(None));
@@ -207,6 +211,7 @@ impl Settings {
 #[cfg(test)]
 #[cfg(feature = "settings")]
 mod tests {
+    use std::collections::HashMap;
     use crate::{settings, CoreEvent, Info, Services, info};
 
     use super::*;
@@ -214,31 +219,48 @@ mod tests {
     #[derive(Debug, Default, Deserialize, Serialize)]
     struct MySettings {
         state: bool,
-        integer: String
+        integer: String,
+    }
+
+    #[derive(Debug, Default, Deserialize, Serialize)]
+    struct Entry {
+        title: String,
+        value: bool,
+    }
+
+    #[typetag::serde]
+    impl SerTrait for Entry {}
+
+    impl Entry {
+        fn new(title: &str, value: bool) -> BoxedSerTrait {
+            Box::new(
+                Entry {
+                    title: title.to_owned(),
+                    value,
+                }
+            ) as BoxedSerTrait
+        }
     }
 
     fn make_layout(settings: MySettings) -> Layout<MySettings> {
         let mut has_error = false;
-        let mut widgets = Vec::new();
-        let mut values = Vec::new();
-
-        values.push(HashMap::from([ ("title", "Disabled".into()), ("value", Value::Bool(false)) ]));
-        values.push(HashMap::from([ ("title", "Enabled".into()), ("value", Value::Bool(true)) ]));
-
-        let dropdown = Widget::Dropdown(Dropdown {
+        let values = vec![
+            Entry::new("Disabled", false),
+            Entry::new("Enabled", true),
+        ];
+        let dropdown = Dropdown {
             title: "Dropdown",
             subtitle: None,
             values,
-            setting: "state"
-        });
-
+            setting: "state",
+        };
         let mut integer = Integer {
             title: "Integer",
             subtitle: None,
             min: "0".to_owned(),
             max: "100".to_owned(),
             setting: "integer",
-            error: None
+            error: None,
         };
 
         if let Ok(out_of_range) = integer.out_of_range(&settings.integer) {
@@ -248,13 +270,15 @@ mod tests {
             }
         }
 
-        widgets.push(dropdown);
-        widgets.push(Widget::Integer(integer));
+        let widgets = vec![
+            Widget::Dropdown(dropdown),
+            Widget::Integer(integer),
+        ];
 
         Layout {
             settings,
             widgets,
-            has_error
+            has_error,
         }
     }
 
