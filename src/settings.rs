@@ -19,7 +19,7 @@ use crate::{
 pub const SVCNAME: &str = "com.roonlabs.settings:1";
 
 #[typetag::serde(tag = "type")]
-pub trait SerTrait {}
+pub trait SerTrait: Send {}
 
 pub type BoxedSerTrait = Box<dyn SerTrait>;
 
@@ -111,29 +111,27 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new<T, U>(
+    pub fn new<T>(
         roon: &RoonApi,
-        get_settings_cb: Box<dyn Fn(fn(Layout<T>) -> Vec<RespProps>) -> Vec<RespProps> + Send>,
-        save_settings_cb: Box<dyn Fn(U) -> Layout<T> + Send>,
+        get_layout_cb: Box<dyn Fn(Option<T>) -> Layout<T> + Send>,
     ) -> (Svc, Self)
     where T: serde::ser::Serialize + serde::de::DeserializeOwned + 'static,
-          U: serde::de::DeserializeOwned + 'static,
     {
         let mut spec = SvcSpec::new(SVCNAME);
         let save_req_id = Arc::new(Mutex::new(None));
-        let get_settings_cb = Arc::new(Mutex::new(get_settings_cb));
+        let get_layout_cb = Arc::new(Mutex::new(get_layout_cb));
 
-        let get_settings_cb_clone = get_settings_cb.clone();
+        let get_layout_cb_clone = get_layout_cb.clone();
         let get_settings = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
-            let get_settings_cb = get_settings_cb_clone.lock().unwrap();
+            let get_layout_cb = get_layout_cb_clone.lock().unwrap();
+            let layout = get_layout_cb(None);
 
-            get_settings_cb(|settings| {
-                send_complete!("Success", Some(json!({"settings": settings})))
-            })
+            send_complete!("Success", Some(json!({"settings": layout})))
         };
 
         spec.add_method("get_settings", Box::new(get_settings));
 
+        let get_layout_cb_clone = get_layout_cb.clone();
         let save_req_id_clone = save_req_id.clone();
         let save_settings = move |_: Option<&Core>, req: Option<&serde_json::Value>| -> Vec<RespProps> {
             if let Some(req) = req {
@@ -145,8 +143,9 @@ impl Settings {
                     *save_req_id = Some(req["request_id"].as_str().unwrap().parse::<usize>().unwrap());
                 }
 
-                let layout = save_settings_cb(
-                    serde_json::from_value::<U>(settings["values"].to_owned()).unwrap(),
+                let get_layout_cb = get_layout_cb_clone.lock().unwrap();
+                let layout = get_layout_cb(
+                    Some(serde_json::from_value::<T>(settings["values"].to_owned()).unwrap()),
                 );
                 let has_error = layout.has_error;
                 let layout = layout.serialize(serde_json::value::Serializer).unwrap();
@@ -171,11 +170,10 @@ impl Settings {
         spec.add_method("save_settings", Box::new(save_settings));
 
         let start = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {
-            let get_settings_cb = get_settings_cb.lock().unwrap();
+            let get_layout_cb = get_layout_cb.lock().unwrap();
+            let layout = get_layout_cb(None);
 
-            get_settings_cb(|settings| {
-                send_continue!("Subscribed", Some(json!({"settings": settings})))
-            })
+            send_continue!("Subscribed", Some(json!({"settings": layout})))
         };
 
         spec.add_sub(Sub {
@@ -290,16 +288,19 @@ mod tests {
 
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
-        let get_settings = |cb: fn(Layout<MySettings>) -> Vec<RespProps>| -> Vec<RespProps> {
-            let value = RoonApi::load_config(CONFIG_PATH, "settings");
-            let settings = serde_json::from_value(value).unwrap_or_default();
+        let get_layout = |settings: Option<MySettings>| -> Layout<MySettings> {
+            let settings = match settings {
+                Some(settings) => settings,
+                None => {
+                    let value = RoonApi::load_config(CONFIG_PATH, "settings");
 
-            cb(make_layout(settings))
-        };
-        let save_settings = |settings: MySettings| -> Layout<MySettings> {
+                    serde_json::from_value(value).unwrap_or_default()
+                }
+            };
+
             make_layout(settings)
         };
-        let (svc, settings) = Settings::new(&roon, Box::new(get_settings), Box::new(save_settings));
+        let (svc, settings) = Settings::new(&roon, Box::new(get_layout));
         let services = vec![Services::Settings(settings)];
         let provided: HashMap<String, Svc> = HashMap::from([
             (settings::SVCNAME.to_owned(), svc),
@@ -307,8 +308,9 @@ mod tests {
         let get_roon_state = || {
             RoonApi::load_config(CONFIG_PATH, "roonstate")
         };
-        let (mut handles, mut core_rx) = roon
-            .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
+        let (mut handles, mut core_rx) = roon.start_discovery(
+            Box::new(get_roon_state), provided, Some(services)
+        ).await.unwrap();
 
         handles.spawn(async move {
             loop {
