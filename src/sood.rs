@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::io::ErrorKind;
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 use std::str::from_utf8;
 use std::sync::Arc;
 use futures_util::Future;
@@ -76,7 +76,7 @@ impl Sood {
                     }
                 }
 
-                for (_, mc) in &*multicast.lock().await {
+                for mc in (*multicast.lock().await).values() {
                     match mc.send_sock.try_recv_from(&mut buf) {
                         Ok((size, from)) => {
                             let buf = &buf[..size];
@@ -142,9 +142,8 @@ impl Sood {
 
         if !has_tid {
             let uuid = Uuid::new_v4().to_string();
-            let mut tid: Vec<u8> = Vec::new();
+            let mut tid: Vec<u8> = vec![TID.len() as u8];
 
-            tid.push(TID.len() as u8);
             tid = [tid, Vec::from(TID)].concat();
             tid.push((uuid.len() >> 8) as u8);
             tid.push((uuid.len() & 0xFF) as u8);
@@ -157,7 +156,7 @@ impl Sood {
         let addr = SocketAddr::new(ip_addr, SOOD_PORT);
         let multicast = self.multicast.lock().await;
 
-        for (_, mc) in &*multicast {
+        for mc in (*multicast).values() {
             if let Err(err) = mc.send_sock.try_send_to(&vec, addr) {
                 if err.kind() != ErrorKind::WouldBlock {
                     return Err(err);
@@ -208,7 +207,7 @@ impl Sood {
         multicast.retain(|_, mcast| mcast.seq == self.iface_seq);
         iface_change |= multicast.len() != initial_len;
 
-        if let None = self.unicast {
+        if self.unicast.is_none() {
             self.unicast = Some(Arc::new(Mutex::new(Unicast::new().await?)));
         }
 
@@ -218,20 +217,22 @@ impl Sood {
     }
 
     async fn listen_iface(&mut self, ip: Ipv4Addr, netmask: Ipv4Addr) -> bool {
-        let mut new_iface = false;
         let mut multicast = self.multicast.lock().await;
 
-        if multicast.contains_key(&ip) {
-            multicast.get_mut(&ip).unwrap().seq = self.iface_seq;
-        } else {
-            if let Ok(mc) = Multicast::new(self.iface_seq, ip, netmask).await {
-                multicast.insert(ip, mc);
-
-                new_iface = true;
+        match multicast.entry(ip) {
+            hash_map::Entry::Vacant(entry) => {
+                if let Ok(mc) = Multicast::new(self.iface_seq, ip, netmask).await {
+                    entry.insert(mc);
+                    true
+                } else {
+                    false
+                }
+            }
+            hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().seq = self.iface_seq;
+                false
             }
         }
-
-        new_iface
     }
 }
 

@@ -265,12 +265,10 @@ impl MooReceiver {
                             } else {
                                 log::debug!("{} {}", header, msg["body"].to_string());
                             }
+                        } else if msg["content_length"].is_null() {
+                            log::info!("{}", header);
                         } else {
-                            if msg["content_length"].is_null() {
-                                log::info!("{}", header);
-                            } else {
-                                log::info!("{} {}", header, msg["body"].to_string());
-                            }
+                            log::info!("{} {}", header, msg["body"].to_string());
                         }
 
                         return Ok(msg)
@@ -315,7 +313,9 @@ impl MooReceiver {
                     state = State::Header;
                 }
                 State::Header => {
-                    if line.len() > 0 {
+                    if line.is_empty() {
+                        state = State::Body;
+                    } else {
                         let line_regex = Regex::new(r"([^:]+): *(.*)").unwrap();
                         let matches = line_regex.captures(line)?;
                         let header = matches.get(1)?.as_str();
@@ -330,8 +330,6 @@ impl MooReceiver {
                         } else {
                             json["headers"][header] = value.into();
                         }
-                    } else {
-                        state = State::Body;
                     }
                 }
                 State::Body => {
@@ -343,8 +341,8 @@ impl MooReceiver {
         }
 
         match state {
-            State::Body => return Some(json),
-            _ => return None
+            State::Body => Some(json),
+            _ => None,
         }
     }
 }

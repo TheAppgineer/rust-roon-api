@@ -7,7 +7,7 @@ pub const SVCNAME: &str = "com.roonlabs.pairing:1";
 pub struct Pairing;
 
 impl Pairing {
-    pub fn new(roon: &RoonApi, on_core_lost: Box<dyn Fn(String) + Send>) -> Svc {
+    pub fn create(roon: &RoonApi, on_core_lost: Box<dyn Fn(String) + Send>) -> Svc {
         let mut spec = SvcSpec::new(SVCNAME);
         let paired_core = roon.paired_core.clone();
         let get_pairing = move |_: Option<&Core>, _: Option<&serde_json::Value>| -> Vec<RespProps> {

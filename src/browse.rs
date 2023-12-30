@@ -105,6 +105,12 @@ pub struct Browse {
     session_keys: Arc<Mutex<HashMap<usize, String>>>,
 }
 
+impl Default for Browse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Browse {
     pub fn new() -> Self {
         Self {
