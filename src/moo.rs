@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use futures_util::stream::{StreamExt, SplitSink, SplitStream};
@@ -50,6 +51,13 @@ macro_rules! send_complete_all {
     ($resp_props:ident, $sub_type:literal, $name:literal, $body:expr) => {
         $resp_props.push((&[$sub_type, "COMPLETE", $name], $body))
     };
+}
+
+pub enum ContentType {
+    Void,
+    Json,
+    Jpeg(Vec<u8>),
+    Png(Vec<u8>),
 }
 
 #[derive(Clone, Debug)]
@@ -230,7 +238,7 @@ impl MooSender {
 }
 
 impl MooReceiver {
-    pub async fn receive_response(&mut self) -> Result<serde_json::Value, Error> {
+    pub async fn receive_response(&mut self) -> Result<(serde_json::Value, ContentType), Error> {
         let timeout = std::time::Duration::from_secs(10);
         let result = tokio::time::timeout(timeout, self.read.next())
             .await
@@ -240,58 +248,77 @@ impl MooReceiver {
             Some(msg) => {
                 let msg = msg?;
 
-                if let Ok(data) = msg.into_text() {
-                    if let Some(msg) = Self::parse(&data) {
-                        let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
-                        let quiet = msg["headers"]["Logging"] == "quiet";
-                        let header = if msg["verb"] == "REQUEST" {
-                            format!("<- {} {} {}/{}", msg["verb"].as_str().unwrap(),
+                if let Message::Binary(data) = &msg {
+                    if let Some((hdr, body)) = Self::parse(data) {
+                        let req_id = hdr["request_id"].as_str().unwrap().parse::<usize>().unwrap();
+                        let quiet = hdr["headers"]["Logging"] == "quiet";
+                        let header = if hdr["verb"] == "REQUEST" {
+                            format!("<- {} {} {}/{}", hdr["verb"].as_str().unwrap(),
                                                       req_id,
-                                                      msg["service"].as_str().unwrap(),
-                                                      msg["name"].as_str().unwrap())
+                                                      hdr["service"].as_str().unwrap(),
+                                                      hdr["name"].as_str().unwrap())
                         } else {
-                            format!("<- {} {} {}", msg["verb"].as_str().unwrap(),
+                            format!("<- {} {} {}", hdr["verb"].as_str().unwrap(),
                                                    req_id,
-                                                   msg["name"].as_str().unwrap())
+                                                   hdr["name"].as_str().unwrap())
+                        };
+                        let msg_string = match &body {
+                            ContentType::Json =>
+                                format!("{} {}", header, hdr["body"]),
+                            ContentType::Jpeg(_) =>
+                                format!("{} <jpeg>", header),
+                            ContentType::Png(_) =>
+                                format!("{} <png>", header),
+                            ContentType::Void =>
+                                header,
                         };
 
+                        let mut quiet_reqs = self.quiet_reqs.lock().unwrap();
+
+                        quiet_reqs.push(req_id);
+
                         if quiet {
-                            let mut quiet_reqs = self.quiet_reqs.lock().unwrap();
-
-                            quiet_reqs.push(req_id);
-
-                            if msg["content_length"].is_null() {
-                                log::debug!("{}", header);
-                            } else {
-                                log::debug!("{} {}", header, msg["body"].to_string());
-                            }
-                        } else if msg["content_length"].is_null() {
-                            log::info!("{}", header);
+                            log::debug!("{}", msg_string);
                         } else {
-                            log::info!("{} {}", header, msg["body"].to_string());
+                            log::info!("{}", msg_string);
                         }
 
-                        return Ok(msg)
+                        return Ok((hdr, body))
                     }
                 }
                 Err(Error::ConnectionClosed)
             }
-            None => Err(Error::ConnectionClosed)
+            None => {
+                Err(Error::ConnectionClosed)
+            }
         }
     }
 
-    fn parse(data: &str) -> Option<serde_json::Value> {
+    fn parse(data: &[u8]) -> Option<(serde_json::Value, ContentType)> {
         enum State {
             Id,
             Header,
-            Body
         }
         let mut state = State::Id;
-        let mut json = json!({
-            "headers": {}
-        });
+        let mut header = Ok(String::new());
+        let mut body = Vec::new();
 
-        for line in data.split('\n') {
+        for (index, byte) in data.bytes().enumerate() {
+            let byte = byte.ok()?;
+            if byte == b'\n' && *data.get(index + 1)? == b'\n' {
+                let bytes = Vec::from(&data[0..index]);
+
+                header = String::from_utf8(bytes);
+                body = Vec::from(&data[index + 2..]);
+
+                break;
+            }
+        }
+
+        let hdr_string = header.ok()?;
+        let mut msg = json!({});
+
+        for line in hdr_string.split('\n') {
             match &state {
                 State::Id => {
                     let line_regex = Regex::new(r"^MOO/([0-9]+) ([A-Z]+) (.*)").unwrap();
@@ -303,46 +330,48 @@ impl MooReceiver {
                         let request = matches.get(3)?.as_str();
                         let matches = request_regex.captures(request)?;
 
-                        json["service"] = matches.get(1)?.as_str().into();
-                        json["name"] = matches.get(2)?.as_str().into();
+                        msg["service"] = matches.get(1)?.as_str().into();
+                        msg["name"] = matches.get(2)?.as_str().into();
                     } else {
-                        json["name"] = matches.get(3)?.as_str().into();
+                        msg["name"] = matches.get(3)?.as_str().into();
                     }
 
-                    json["verb"] = verb.into();
+                    msg["verb"] = verb.into();
                     state = State::Header;
                 }
                 State::Header => {
-                    if line.is_empty() {
-                        state = State::Body;
-                    } else {
+                    if !line.is_empty() {
                         let line_regex = Regex::new(r"([^:]+): *(.*)").unwrap();
                         let matches = line_regex.captures(line)?;
                         let header = matches.get(1)?.as_str();
                         let value = matches.get(2)?.as_str();
 
                         if header == "Content-Type" {
-                            json["content_type"] = value.into();
+                            msg["content_type"] = value.into();
                         } else if header == "Content-Length" {
-                            json["content_length"] = value.parse::<usize>().unwrap().into();
+                            msg["content_length"] = value.parse::<usize>().unwrap().into();
                         } else if header == "Request-Id" {
-                            json["request_id"] = value.into();
+                            msg["request_id"] = value.into();
                         } else {
-                            json["headers"][header] = value.into();
+                            msg["headers"][header] = value.into();
                         }
-                    }
-                }
-                State::Body => {
-                    if json["content_type"] == "application/json" {
-                        json["body"] = serde_json::from_str(line).unwrap();
                     }
                 }
             }
         }
 
-        match state {
-            State::Body => Some(json),
-            _ => None,
+        if msg["content_type"] == "application/json" {
+            let body = String::from_utf8(body);
+
+            msg["body"] = serde_json::from_str(&body.ok()?).unwrap();
+
+            Some((msg, ContentType::Json))
+        } else if msg["content_type"] == "image/jpeg" {
+            Some((msg, ContentType::Jpeg(body)))
+        } else if msg["content_type"] == "image/png" {
+            Some((msg, ContentType::Png(body)))
+        } else {
+            Some((msg, ContentType::Void))
         }
     }
 }

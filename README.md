@@ -14,9 +14,9 @@ The official RoonLabs Node Roon API provides optional services via separate git 
 |node-roon-api-settings|settings|Ported|
 |node-roon-api-transport|transport|Ported|
 |node-roon-api-browse|browse|Ported|
+|node-roon-api-image|image|Ported|
 |node-roon-api-volume-control||Not Ported|
 |node-roon-api-source-control||Not Ported|
-|node-roon-api-image||Not ported|
 
 ### Notes
 Each feature is implemented in its own file. The file contains some test code that can act as a basic example of that specific feature.
@@ -30,7 +30,7 @@ The Rust Roon API cannot be found on cates.io, instead the git repository has to
 
 ```
 [dependencies]
-rust-roon-api = { git = "https://github.com/TheAppgineer/rust-roon-api.git", tag = "0.0.1", features = ["settings", "status", "transport"] }
+rust-roon-api = { git = "https://github.com/TheAppgineer/rust-roon-api.git", tag = "0.2.0", features = ["settings", "status", "transport"] }
 ```
 
 To put the API into use you also depend on Tokio and Serde
@@ -43,4 +43,4 @@ serde_json = "1.0"
 ```
 
 ## A Real-Life Application
-An API implementation can only prove its usability by being used in a real-life application. For this reason I created the [Zone Presets](https://github.com/TheAppgineer/roon-extension-zone-presets) extension. The first extension that is written from the ground up in Rust.
+An API implementation can only prove its usability by being used in a real-life application. For this reason I created [Roon TUI](https://github.com/TheAppgineer/roon-tui). The first extension that is written from the ground up in Rust.

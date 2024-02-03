@@ -30,6 +30,7 @@ simple-logging = "2.0"
 pairing = []
 status = []
 settings = []
+image = []
 transport = ["pairing"]
 browse = ["pairing"]
 default = []

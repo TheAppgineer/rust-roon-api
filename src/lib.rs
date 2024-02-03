@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use futures_util::{Future, FutureExt, future::select_all};
-use moo::{Moo, MooReceiver, MooSender};
+use moo::{ContentType, Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
 use serde::Serialize;
 use serde_json::json;
@@ -19,6 +19,7 @@ mod sood;
 #[cfg(feature = "pairing")]   pub mod pairing;
 #[cfg(feature = "transport")] pub mod transport;
 #[cfg(feature = "browse")]    pub mod browse;
+#[cfg(feature = "image")]     pub mod image;
 
 pub const ROON_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -42,7 +43,7 @@ pub struct Core {
     pub display_version: String,
     id: String,
     moo: Moo,
-    #[cfg(any(feature = "status", feature = "transport", feature = "browse"))]
+    #[cfg(any(feature = "status", feature = "transport", feature = "browse", feature = "image"))]
     services: Option<Vec<Services>>
 }
 
@@ -58,7 +59,7 @@ impl Core {
     pub fn get_transport(&mut self) -> Option<&mut transport::Transport> {
         let services = self.services.as_mut()?;
 
-        #[cfg(any(feature = "status", feature = "settings", feature = "browse"))]
+        #[cfg(any(feature = "status", feature = "settings", feature = "browse", feature = "image"))]
         let transport = services.iter_mut()
             .find_map(|svc| {
                 if let Services::Transport(transport) = svc {
@@ -68,7 +69,7 @@ impl Core {
                 }
             })?;
 
-        #[cfg(not(any(feature = "status", feature = "settings", feature = "browse")))]
+        #[cfg(not(any(feature = "status", feature = "settings", feature = "browse", feature = "image")))]
         let Services::Transport(transport) = services.iter_mut().next()?;
 
         transport.set_moo(self.moo.clone());
@@ -80,7 +81,7 @@ impl Core {
     pub fn get_browse(&mut self) -> Option<&browse::Browse> {
         let services = self.services.as_mut()?;
 
-        #[cfg(any(feature = "status", feature = "settings", feature = "transport"))]
+        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "image"))]
         let browse = services.iter_mut()
             .find_map(|svc| {
                 if let Services::Browse(browse) = svc {
@@ -90,12 +91,34 @@ impl Core {
                 }
             })?;
 
-        #[cfg(not(any(feature = "status", feature = "settings", feature = "transport")))]
+        #[cfg(not(any(feature = "status", feature = "settings", feature = "transport", feature = "image")))]
         let Services::Browse(browse) = services.iter_mut().next()?;
 
         browse.set_moo(self.moo.clone());
 
         Some(browse)
+    }
+
+    #[cfg(feature = "image")]
+    pub fn get_image(&mut self) -> Option<&image::Image> {
+        let services = self.services.as_mut()?;
+
+        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
+        let image = services.iter_mut()
+            .find_map(|svc| {
+                if let Services::Image(image) = svc {
+                    Some(image)
+                } else {
+                    None
+                }
+            })?;
+
+        #[cfg(not(any(feature = "status", feature = "settings", feature = "transport", feature = "browse")))]
+        let Services::Image(image) = services.iter_mut().next()?;
+
+        image.set_moo(self.moo.clone());
+
+        Some(image)
     }
 
     #[cfg(feature = "status")]
@@ -142,7 +165,7 @@ impl RoonApi {
         &mut self,
         get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
         provided: HashMap<String, Svc>,
-        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
+        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         services: Option<Vec<Services>>,
         ip: &IpAddr,
         port: &str,
@@ -151,10 +174,10 @@ impl RoonApi {
 
         match Moo::new(ip, port).await {
             Ok(moo_tuple) => {
-                #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
+                #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
                 let (moo_handle, core_rx) = self.start_moo_receiver(get_roon_state, provided, services, moo_rx);
 
-                #[cfg(not(any(feature = "status", feature = "settings", feature = "transport", feature = "browse")))]
+                #[cfg(not(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image")))]
                 let (moo_handle, core_rx) = self.start_moo_receiver(get_roon_state, provided, moo_rx);
                 let mut handles = JoinSet::new();
 
@@ -174,16 +197,16 @@ impl RoonApi {
         &mut self,
         get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
         provided: HashMap<String, Svc>,
-        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
+        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         services: Option<Vec<Services>>,
     ) -> Option<(JoinSet<()>, EventReceiver)> {
         let (moo_tx, moo_rx) = mpsc::channel::<(Moo, MooSender, MooReceiver)>(4);
         let mut handles = self.start_sood_receiver(moo_tx).await;
 
-        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
+        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         let (moo_handle, core_rx) = self.start_moo_receiver(get_roon_state, provided, services, moo_rx);
 
-        #[cfg(not(any(feature = "status", feature = "settings", feature = "transport", feature = "browse")))]
+        #[cfg(not(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image")))]
         let (moo_handle, core_rx) = self.start_moo_receiver(get_roon_state, provided, moo_rx);
 
         handles.spawn(moo_handle);
@@ -285,7 +308,7 @@ impl RoonApi {
         &self,
         get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
         mut provided: HashMap<String, Svc>,
-        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse"))]
+        #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         services: Option<Vec<Services>>,
         mut moo_rx: mpsc::Receiver<(Moo, MooSender, MooReceiver)>,
     ) -> (impl Future<Output = ()>, EventReceiver) {
@@ -317,7 +340,7 @@ impl RoonApi {
         let paired_core = self.paired_core.clone();
 
         let sood_conns = self.sood_conns.clone();
-        let mut body = self.reg_info.clone();
+        let mut reg_info = self.reg_info.clone();
         let moo_receive = async move {
             let mut moo_senders: Vec<MooSender> = Vec::new();
             let mut cores: HashMap<usize, Core> = HashMap::new();
@@ -328,7 +351,7 @@ impl RoonApi {
                 let mut msg_receivers = Vec::new();
                 let mut req_receivers = Vec::new();
                 let mut new_moo = None;
-                let mut index_msg: Option<(usize, Option<serde_json::Value>)> = None;
+                let mut index_msg: Option<(usize, Option<(serde_json::Value, ContentType)>)> = None;
                 let mut props_option: Vec<RespProps> = Vec::new();
                 let mut response_ids: Vec<HashMap<usize, usize>> = Vec::new();
                 let mut msg_string: Option<String> = None;
@@ -374,22 +397,26 @@ impl RoonApi {
                     continue;
                 } else if let Some((index, msg)) = index_msg {
                     match msg {
-                        Some(msg) => {
+                        Some((msg, _body)) => {
                             if msg["request_id"] == "0" && msg["body"]["core_id"].is_string() {
                                 let roon_state = get_roon_state();
                                 let moo = moo_senders.get_mut(index).unwrap();
 
-                                #[cfg(any(feature = "transport", feature = "browse"))]
+                                #[cfg(any(feature = "transport", feature = "browse", feature = "image"))]
                                 if let Some(services) = &services {
                                     for svc in services {
                                         match svc {
                                             #[cfg(feature = "transport")]
                                             Services::Transport(_) => {
-                                                body["required_services"].as_array_mut().unwrap().push(json!(transport::SVCNAME));
+                                                reg_info["required_services"].as_array_mut().unwrap().push(json!(transport::SVCNAME));
                                             }
                                             #[cfg(feature = "browse")]
                                             Services::Browse(_) => {
-                                                body["required_services"].as_array_mut().unwrap().push(json!(browse::SVCNAME));
+                                                reg_info["required_services"].as_array_mut().unwrap().push(json!(browse::SVCNAME));
+                                            }
+                                            #[cfg(feature = "image")]
+                                            Services::Image(_) => {
+                                                reg_info["required_services"].as_array_mut().unwrap().push(json!(image::SVCNAME));
                                             }
                                             #[cfg(any(feature = "status", feature = "settings"))]
                                             _ => ()
@@ -398,20 +425,20 @@ impl RoonApi {
                                 }
 
                                 for name in provided.keys() {
-                                    body["provided_services"].as_array_mut().unwrap().push(json!(name));
+                                    reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
                                 }
 
                                 if let Some(tokens) = roon_state.get("tokens") {
                                     let core_id = msg["body"]["core_id"].as_str().unwrap();
 
                                     if let Some(token) = tokens.get(core_id) {
-                                        body["token"] = token.to_owned();
+                                        reg_info["token"] = token.to_owned();
                                     }
                                 }
 
                                 let req_id = moo.req_id.lock().unwrap().to_owned();
 
-                                props_option.push((&["REQUEST", "com.roonlabs.registry:1/register"], Some(body.to_owned())));
+                                props_option.push((&["REQUEST", "com.roonlabs.registry:1/register"], Some(reg_info.to_owned())));
                                 response_ids.push(HashMap::from([(index, req_id)]));
                             } else if msg["name"] == "Registered" {
                                 let body = &msg["body"];
@@ -421,7 +448,7 @@ impl RoonApi {
                                     display_version: body["display_version"].as_str().unwrap().to_string(),
                                     id: body["core_id"].as_str().unwrap().to_string(),
                                     moo,
-                                    #[cfg(any(feature = "status", feature = "transport", feature = "browse"))]
+                                    #[cfg(any(feature = "status", feature = "transport", feature = "browse", feature = "image"))]
                                     services: services.clone()
                                 };
                                 let mut roon_state = get_roon_state();
@@ -538,7 +565,7 @@ impl RoonApi {
                                     response_ids.push(HashMap::from([(index, request_id)]));
                                 }
                             } else {
-                                #[cfg(any(feature = "transport", feature = "browse"))]
+                                #[cfg(any(feature = "transport", feature = "browse", feature = "image"))]
                                 if let Some(svcs) = services.as_ref() {
                                     for svc in svcs {
                                         match svc {
@@ -571,6 +598,15 @@ impl RoonApi {
                                                         core_tx.send((CoreEvent::None, Some((msg, parsed)))).await.unwrap();
                                                         break;
                                                     }
+                                                }
+                                            }
+                                            #[cfg(feature = "image")]
+                                            Services::Image(image) => {
+                                                if let Some(parsed) = image.parse_msg(&msg, &_body).await {
+                                                    core_tx.send((
+                                                        CoreEvent::None,
+                                                        Some((serde_json::Value::Null, parsed))
+                                                    )).await.unwrap();
                                                 }
                                             }
                                             #[cfg(any(feature = "status", feature = "settings"))]
@@ -833,6 +869,7 @@ pub enum Services {
     #[cfg(feature = "settings")]  Settings(settings::Settings),
     #[cfg(feature = "transport")] Transport(transport::Transport),
     #[cfg(feature = "browse")]    Browse(browse::Browse),
+    #[cfg(feature = "image")]     Image(image::Image),
 }
 
 #[derive(Debug)]
@@ -849,6 +886,8 @@ pub enum Parsed {
     #[cfg(feature = "transport")] QueueChanges(Vec<transport::QueueChange>),
     #[cfg(feature = "browse")]    BrowseResult(browse::BrowseResult, Option<String>),
     #[cfg(feature = "browse")]    LoadResult(browse::LoadResult, Option<String>),
+    #[cfg(feature = "image")]     Jpeg((String, Vec<u8>)),
+    #[cfg(feature = "image")]     Png((String, Vec<u8>)),
 }
 
 #[derive(Serialize)]
@@ -930,7 +969,7 @@ impl Info {
 }
 
 #[cfg(test)]
-#[cfg(not(any(feature = "pairing", feature = "status", feature = "settings")))]
+#[cfg(not(any(feature = "pairing", feature = "status", feature = "settings", feature = "image")))]
 mod tests {
     use super::*;
 
