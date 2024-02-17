@@ -53,6 +53,7 @@ macro_rules! send_complete_all {
     };
 }
 
+#[derive(Clone, Debug)]
 pub enum ContentType {
     Void,
     Json,

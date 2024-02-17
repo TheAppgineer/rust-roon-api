@@ -395,7 +395,9 @@ impl RoonApi {
 
                     // Restart loop to start using
                     continue;
-                } else if let Some((index, msg)) = index_msg {
+                }
+
+                if let Some((index, msg)) = index_msg {
                     match msg {
                         Some((msg, _body)) => {
                             if msg["request_id"] == "0" && msg["body"]["core_id"].is_string() {

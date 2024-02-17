@@ -545,7 +545,7 @@ impl Transport {
 }
 
 #[cfg(test)]
-#[cfg(all(feature = "transport", not(feature = "image")))]
+#[cfg(feature = "transport")]
 mod tests {
     use std::collections::HashMap;
 

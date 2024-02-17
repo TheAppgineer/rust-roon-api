@@ -181,7 +181,7 @@ impl Browse {
 }
 
 #[cfg(test)]
-#[cfg(feature = "browse")]
+#[cfg(all(feature = "browse", not(feature = "image")))]
 mod tests {
     use std::collections::HashMap;
     use tokio::io::{self, AsyncBufReadExt};

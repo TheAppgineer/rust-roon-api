@@ -1,11 +1,11 @@
 use serde::Serialize;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use crate::{moo::ContentType, Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.image:1";
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scale {
     #[default] Original,
@@ -14,21 +14,21 @@ pub enum Scale {
     Stretch,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Format {
     #[default] #[serde(rename = "image/jpeg")] Jpeg,
     #[serde(rename = "image/png")] Png,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct Scaling {
     scale: Scale,
     width: u32,
     height: u32,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 pub struct Args {
     #[serde(flatten)] scaling: Option<Scaling>,
     format: Option<Format>,
@@ -56,14 +56,14 @@ impl Args {
 #[derive(Clone, Debug, Default)]
 pub struct Image {
     moo: Option<Moo>,
-    pending: Arc<Mutex<Option<(usize, String)>>>,
+    pending: Arc<Mutex<HashMap<usize, String>>>,
 }
 
 impl Image {
     pub fn new() -> Self {
         Self {
             moo: None,
-            pending: Arc::new(Mutex::new(None)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -80,20 +80,20 @@ impl Image {
         let req_id = moo.send_req(SVCNAME.to_owned() + "/get_image", Some(args)).await.ok();
         let mut pending = self.pending.lock().await;
 
-        *pending = Some((req_id?, image_key.to_owned()));
+        pending.insert(req_id?, image_key.to_owned());
 
         req_id
     }
 
     pub async fn parse_msg(&self, msg: &serde_json::Value, body: &ContentType) -> Option<Parsed> {
         let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
-        let pending = self.pending.lock().await;
-        let parsed = if let Some((pending_id, image_key)) = pending.as_ref() {
+        let mut pending = self.pending.lock().await;
+        let parsed = if let Some(image_key) = pending.remove(&req_id) {
             match body {
-                ContentType::Jpeg(jpeg) if *pending_id == req_id => {
+                ContentType::Jpeg(jpeg) => {
                     Some(Parsed::Jpeg((image_key.to_owned(), jpeg.to_owned())))
                 }
-                ContentType::Png(png) if *pending_id == req_id => {
+                ContentType::Png(png) => {
                     Some(Parsed::Png((image_key.to_owned(), png.to_owned())))
                 }
                 _ => None
@@ -107,12 +107,12 @@ impl Image {
 }
 
 #[cfg(test)]
-#[cfg(all(feature = "image", feature = "transport"))]
+#[cfg(all(feature = "image", feature = "browse"))]
 mod tests {
     use std::{collections::HashMap, fs};
 
     use super::*;
-    use crate::{CoreEvent, Info, Parsed, RoonApi, Services, Svc, transport::{Transport, Zone}, info};
+    use crate::{browse::{Action, Browse, BrowseOpts, LoadOpts}, info, CoreEvent, Info, Parsed, RoonApi, Services, Svc};
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
@@ -123,7 +123,7 @@ mod tests {
 
         let mut roon = RoonApi::new(info);
         let services = vec![
-            Services::Transport(Transport::new()),
+            Services::Browse(Browse::new()),
             Services::Image(Image::new(),)
         ];
         let provided: HashMap<String, Svc> = HashMap::new();
@@ -136,6 +136,7 @@ mod tests {
 
         handles.spawn(async move {
             let mut image = None;
+            let mut browse = None;
 
             loop {
                 if let Some((core, msg)) = core_rx.recv().await {
@@ -144,9 +145,15 @@ mod tests {
                             log::info!("Core found: {}, version {}", core.display_name, core.display_version);
 
                             image = core.get_image().cloned();
+                            browse = core.get_browse().cloned();
 
-                            if let Some(transport) = core.get_transport() {
-                                transport.subscribe_zones().await;
+                            if let Some(browse) = browse.as_ref() {
+                                let opts = BrowseOpts {
+                                    pop_all: true,
+                                    ..Default::default()
+                                };
+
+                                browse.browse(&opts).await;
                             }
                         }
                         CoreEvent::Lost(core) => {
@@ -160,15 +167,62 @@ mod tests {
                             Parsed::RoonState => {
                                 RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                             }
-                            Parsed::Zones(zones) => {
-                                for zone in &zones {
-                                    if get_image(image.as_mut(), zone).await.is_some() {
-                                        break;
+                            Parsed::BrowseResult(result, _) => {
+                                if result.action ==  Action::List {
+                                    if let Some(browse) = browse.as_ref() {
+                                        let offset = 0;
+                                        let opts = LoadOpts {
+                                            count: Some(10),
+                                            offset,
+                                            set_display_offset: offset,
+                                            ..Default::default()
+                                        };
+
+                                        browse.load(&opts).await;
                                     }
                                 }
                             }
-                            Parsed::Jpeg((_, jpeg)) => {
-                                fs::write("test.jpg", jpeg).unwrap();
+                            Parsed::LoadResult(result, _) => {
+                                let next = match result.list.level {
+                                    0 => Some("Library"),
+                                    1 => Some("Artists"),
+                                    _ => None,
+                                };
+                                let item_key = next
+                                    .map(|title| result.items
+                                        .iter()
+                                        .find_map(|item| {
+                                            if item.title == title {
+                                                Some(item.item_key.as_ref())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .flatten()
+                                    )
+                                    .flatten()
+                                    .cloned();
+
+                                match item_key {
+                                    Some(_) => {
+                                        if let Some(browse) = browse.as_ref() {
+                                            let opts = BrowseOpts {
+                                                item_key,
+                                                ..Default::default()
+                                            };
+
+                                            browse.browse(&opts).await;
+                                        }
+                                    }
+                                    None => {
+                                        for item in result.items {
+                                            get_image(image.as_mut(), item.image_key.as_deref()).await;
+                                        }
+                                    }
+                                }
+                            }
+                            Parsed::Jpeg((image_key, jpeg)) => {
+                                fs::write(format!("{image_key}.jpg"), jpeg).unwrap();
                             }
                             _ => {}
                         }
@@ -180,13 +234,11 @@ mod tests {
         handles.join_next().await;
     }
 
-    async fn get_image(image: Option<&mut Image>, zone: &Zone) -> Option<()> {
-        let now_playing = zone.now_playing.as_ref()?;
-        let image_key = now_playing.image_key.as_deref()?;
+    async fn get_image(image: Option<&mut Image>, image_key: Option<&str>) -> Option<()> {
         let scaling = Scaling::new(Scale::Fit, 200, 200);
         let args = Args::new(Some(scaling), Some(Format::Jpeg));
 
-        image?.get_image(image_key, args).await;
+        image?.get_image(image_key?, args).await;
 
         Some(())
     }
