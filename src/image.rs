@@ -71,7 +71,7 @@ impl Image {
         self.moo = Some(moo);
     }
 
-    pub async fn get_image(&mut self, image_key: &str, args: Args) -> Option<usize> {
+    pub async fn get_image(&self, image_key: &str, args: Args) -> Option<usize> {
         let moo = self.moo.as_ref()?;
         let mut args = args.serialize(serde_json::value::Serializer).unwrap();
 
