@@ -312,7 +312,7 @@ impl RoonApi {
         services: Option<Vec<Services>>,
         mut moo_rx: mpsc::Receiver<(Moo, MooSender, MooReceiver)>,
     ) -> (impl Future<Output = ()>, EventReceiver) {
-        let (core_tx, core_rx) = mpsc::channel::<(CoreEvent, Option<(serde_json::Value, Parsed)>)>(4);
+        let (core_tx, core_rx) = mpsc::channel::<(CoreEvent, Option<(serde_json::Value, Parsed)>)>(10);
 
         let ping = Ping::create(self);
 

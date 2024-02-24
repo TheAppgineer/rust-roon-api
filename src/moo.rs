@@ -94,7 +94,7 @@ impl Moo {
 
         let (ws, _) = tokio_tungstenite::connect_async(url).await?;
         let (write, read) = ws.split();
-        let (msg_tx, msg_rx) = mpsc::channel::<(usize, String)>(4);
+        let (msg_tx, msg_rx) = mpsc::channel::<(usize, String)>(10);
 
         let req_id_clone = req_id.clone();
         let moo = Moo {

@@ -1,14 +1,15 @@
+use crate::{moo::ContentType, Moo, Parsed};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use crate::{moo::ContentType, Moo, Parsed};
 
 pub const SVCNAME: &str = "com.roonlabs.image:1";
 
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scale {
-    #[default] Original,
+    #[default]
+    Original,
     Fit,
     Fill,
     Stretch,
@@ -17,8 +18,11 @@ pub enum Scale {
 #[derive(Clone, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Format {
-    #[default] #[serde(rename = "image/jpeg")] Jpeg,
-    #[serde(rename = "image/png")] Png,
+    #[default]
+    #[serde(rename = "image/jpeg")]
+    Jpeg,
+    #[serde(rename = "image/png")]
+    Png,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -30,7 +34,8 @@ pub struct Scaling {
 
 #[derive(Clone, Default, Serialize)]
 pub struct Args {
-    #[serde(flatten)] scaling: Option<Scaling>,
+    #[serde(flatten)]
+    scaling: Option<Scaling>,
     format: Option<Format>,
 }
 
@@ -46,10 +51,7 @@ impl Scaling {
 
 impl Args {
     pub fn new(scaling: Option<Scaling>, format: Option<Format>) -> Self {
-        Self {
-            scaling,
-            format,
-        }
+        Self { scaling, format }
     }
 }
 
@@ -72,31 +74,54 @@ impl Image {
     }
 
     pub async fn get_image(&self, image_key: &str, args: Args) -> Option<usize> {
-        let moo = self.moo.as_ref()?;
-        let mut args = args.serialize(serde_json::value::Serializer).unwrap();
+        let req_id = {
+            let pending = self.pending.lock().await;
 
-        args["image_key"] = image_key.into();
+            pending.iter().find_map(|(key, value)| {
+                if value == image_key {
+                    Some(key.to_owned())
+                } else {
+                    None
+                }
+            })
+        };
 
-        let req_id = moo.send_req(SVCNAME.to_owned() + "/get_image", Some(args)).await.ok();
-        let mut pending = self.pending.lock().await;
+        match req_id {
+            None => {
+                let moo = self.moo.as_ref()?;
+                let mut args = args.serialize(serde_json::value::Serializer).unwrap();
 
-        pending.insert(req_id?, image_key.to_owned());
+                args["image_key"] = image_key.into();
 
-        req_id
+                let req_id = moo
+                    .send_req(SVCNAME.to_owned() + "/get_image", Some(args))
+                    .await
+                    .ok();
+
+                self.pending
+                    .lock()
+                    .await
+                    .insert(req_id?, image_key.to_owned());
+
+                req_id
+            }
+            Some(_) => req_id,
+        }
     }
 
     pub async fn parse_msg(&self, msg: &serde_json::Value, body: &ContentType) -> Option<Parsed> {
-        let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
-        let mut pending = self.pending.lock().await;
-        let parsed = if let Some(image_key) = pending.remove(&req_id) {
+        let req_id = msg["request_id"]
+            .as_str()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let parsed = if let Some(image_key) = self.pending.lock().await.remove(&req_id) {
             match body {
                 ContentType::Jpeg(jpeg) => {
                     Some(Parsed::Jpeg((image_key.to_owned(), jpeg.to_owned())))
                 }
-                ContentType::Png(png) => {
-                    Some(Parsed::Png((image_key.to_owned(), png.to_owned())))
-                }
-                _ => None
+                ContentType::Png(png) => Some(Parsed::Png((image_key.to_owned(), png.to_owned()))),
+                _ => None,
             }
         } else {
             None
@@ -112,7 +137,10 @@ mod tests {
     use std::{collections::HashMap, fs};
 
     use super::*;
-    use crate::{browse::{Action, Browse, BrowseOpts, LoadOpts}, info, CoreEvent, Info, Parsed, RoonApi, Services, Svc};
+    use crate::{
+        browse::{Action, Browse, BrowseOpts, LoadOpts},
+        info, CoreEvent, Info, Parsed, RoonApi, Services, Svc,
+    };
 
     #[tokio::test(flavor = "current_thread")]
     async fn it_works() {
@@ -124,15 +152,15 @@ mod tests {
         let mut roon = RoonApi::new(info);
         let services = vec![
             Services::Browse(Browse::new()),
-            Services::Image(Image::new(),)
+            Services::Image(Image::new()),
         ];
         let provided: HashMap<String, Svc> = HashMap::new();
-        let get_roon_state = || {
-            RoonApi::load_config(CONFIG_PATH, "roonstate")
-        };
+        let get_roon_state = || RoonApi::load_config(CONFIG_PATH, "roonstate");
 
         let (mut handles, mut core_rx) = roon
-            .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
+            .start_discovery(Box::new(get_roon_state), provided, Some(services))
+            .await
+            .unwrap();
 
         handles.spawn(async move {
             let mut image = None;
@@ -142,7 +170,11 @@ mod tests {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
                         CoreEvent::Found(mut core) => {
-                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
+                            log::info!(
+                                "Core found: {}, version {}",
+                                core.display_name,
+                                core.display_version
+                            );
 
                             image = core.get_image().cloned();
                             browse = core.get_browse().cloned();
@@ -157,9 +189,13 @@ mod tests {
                             }
                         }
                         CoreEvent::Lost(core) => {
-                            log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
+                            log::warn!(
+                                "Core lost: {}, version {}",
+                                core.display_name,
+                                core.display_version
+                            );
                         }
-                        _ => ()
+                        _ => (),
                     }
 
                     if let Some((msg, parsed)) = msg {
@@ -168,7 +204,7 @@ mod tests {
                                 RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
                             }
                             Parsed::BrowseResult(result, _) => {
-                                if result.action ==  Action::List {
+                                if result.action == Action::List {
                                     if let Some(browse) = browse.as_ref() {
                                         let offset = 0;
                                         let opts = LoadOpts {
@@ -189,17 +225,19 @@ mod tests {
                                     _ => None,
                                 };
                                 let item_key = next
-                                    .map(|title| result.items
-                                        .iter()
-                                        .find_map(|item| {
-                                            if item.title == title {
-                                                Some(item.item_key.as_ref())
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .flatten()
-                                    )
+                                    .map(|title| {
+                                        result
+                                            .items
+                                            .iter()
+                                            .find_map(|item| {
+                                                if item.title == title {
+                                                    Some(item.item_key.as_ref())
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .flatten()
+                                    })
                                     .flatten()
                                     .cloned();
 
@@ -216,7 +254,8 @@ mod tests {
                                     }
                                     None => {
                                         for item in result.items {
-                                            get_image(image.as_mut(), item.image_key.as_deref()).await;
+                                            get_image(image.as_mut(), item.image_key.as_deref())
+                                                .await;
                                         }
                                     }
                                 }
