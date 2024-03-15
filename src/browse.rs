@@ -54,7 +54,7 @@ pub struct LoadOpts {
     pub set_display_offset: usize,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct List {
     pub title: String,
     pub count: usize,
@@ -65,7 +65,7 @@ pub struct List {
     pub hint: Option<ListHint>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct InputPrompt {
     pub prompt: String,
     pub action: String,
@@ -73,7 +73,7 @@ pub struct InputPrompt {
     pub is_password: Option<bool>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Item {
     pub title: String,
     pub subtitle: Option<String>,
