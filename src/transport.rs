@@ -252,15 +252,12 @@ impl Transport {
         moo.send_req(SVCNAME.to_owned() + "/standby", Some(body)).await.ok()
     }
 
-    pub async fn toggle_standby(&self, output_id: &str, control_key: Option<&str>) -> Option<usize> {
+    pub async fn toggle_standby(&self, output_id: &str, control_key: &str) -> Option<usize> {
         let moo = self.moo.as_ref()?;
-        let mut body = json!({
+        let body = json!({
             "output_id": output_id,
+            "control_key": control_key,
         });
-
-        if let Some(control_key) = control_key {
-            body["control_key"] = control_key.into();
-        }
 
         moo.send_req(SVCNAME.to_owned() + "/toggle_standby", Some(body)).await.ok()
     }
