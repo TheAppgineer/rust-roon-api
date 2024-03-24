@@ -121,9 +121,7 @@ mod tests {
         let (svc, status) = Status::new(&roon);
         let services = vec![Services::Status(status)];
         let mut provided: HashMap<String, Svc> = HashMap::new();
-        let get_roon_state = || {
-            RoonApi::load_config(CONFIG_PATH, "roonstate")
-        };
+        let get_roon_state = || RoonApi::load_roon_state(CONFIG_PATH);
 
         provided.insert(status::SVCNAME.to_owned(), svc);
 
@@ -147,9 +145,9 @@ mod tests {
                         _ => ()
                     }
 
-                    if let Some((msg, parsed)) = msg {
-                        if let Parsed::RoonState = parsed {
-                            RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
+                    if let Some((_, parsed)) = msg {
+                        if let Parsed::RoonState(roon_state) = parsed {
+                            RoonApi::save_roon_state(CONFIG_PATH, roon_state).unwrap();
                         }
                     }
                 }

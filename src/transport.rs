@@ -559,9 +559,7 @@ mod tests {
         let mut roon = RoonApi::new(info);
         let services = vec![Services::Transport(Transport::new())];
         let provided: HashMap<String, Svc> = HashMap::new();
-        let get_roon_state = || {
-            RoonApi::load_config(CONFIG_PATH, "roonstate")
-        };
+        let get_roon_state = || RoonApi::load_roon_state(CONFIG_PATH);
         let (mut handles, mut core_rx) = roon
             .start_discovery(Box::new(get_roon_state), provided, Some(services)).await.unwrap();
 
@@ -587,10 +585,10 @@ mod tests {
                         _ => ()
                     }
 
-                    if let Some((msg, parsed)) = msg {
+                    if let Some((_, parsed)) = msg {
                         match parsed {
-                            Parsed::RoonState => {
-                                RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
+                            Parsed::RoonState(roon_state) => {
+                                RoonApi::save_roon_state(CONFIG_PATH, roon_state).unwrap();
                             }
                             Parsed::Zones(zones) => {
                                 for zone in zones {

@@ -94,9 +94,7 @@ mod tests {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
-        let get_roon_state = || {
-            RoonApi::load_config(CONFIG_PATH, "roonstate")
-        };
+        let get_roon_state = || RoonApi::load_roon_state(CONFIG_PATH);
         let (mut handles, mut core_rx) = roon
             .start_discovery(Box::new(get_roon_state), provided).await.unwrap();
 
@@ -113,9 +111,9 @@ mod tests {
                         _ => (),
                     }
 
-                    if let Some((msg, parsed)) = msg {
-                        if let Parsed::RoonState = parsed {
-                            RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
+                    if let Some((_, parsed)) = msg {
+                        if let Parsed::RoonState(roon_state) = parsed {
+                            RoonApi::save_roon_state(CONFIG_PATH, roon_state).unwrap();
                         }
                     }
                 }

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::{Future, FutureExt, future::select_all};
 use moo::{ContentType, Moo, MooReceiver, MooSender};
 use sood::{Message, Sood};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver};
@@ -35,6 +35,12 @@ pub struct RoonApi {
     lost_core_id: Arc<Mutex<Option<String>>>,
     #[cfg(feature = "pairing")]
     paired_core: Arc<Mutex<Option<Core>>>
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct RoonState {
+    pub tokens: HashMap<String, String>,
+    pub paired_core_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -163,7 +169,7 @@ impl RoonApi {
 
     pub async fn ws_connect(
         &mut self,
-        get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
+        get_roon_state: Box<dyn Fn() -> RoonState + Send>,
         provided: HashMap<String, Svc>,
         #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         services: Option<Vec<Services>>,
@@ -195,7 +201,7 @@ impl RoonApi {
 
     pub async fn start_discovery(
         &mut self,
-        get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
+        get_roon_state: Box<dyn Fn() -> RoonState + Send>,
         provided: HashMap<String, Svc>,
         #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         services: Option<Vec<Services>>,
@@ -306,7 +312,7 @@ impl RoonApi {
 
     fn start_moo_receiver(
         &self,
-        get_roon_state: Box<dyn Fn() -> serde_json::Value + Send>,
+        get_roon_state: Box<dyn Fn() -> RoonState + Send>,
         mut provided: HashMap<String, Svc>,
         #[cfg(any(feature = "status", feature = "settings", feature = "transport", feature = "browse", feature = "image"))]
         services: Option<Vec<Services>>,
@@ -430,12 +436,10 @@ impl RoonApi {
                                     reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
                                 }
 
-                                if let Some(tokens) = roon_state.get("tokens") {
-                                    let core_id = msg["body"]["core_id"].as_str().unwrap();
+                                let core_id = msg["body"]["core_id"].as_str().unwrap();
 
-                                    if let Some(token) = tokens.get(core_id) {
-                                        reg_info["token"] = token.to_owned();
-                                    }
+                                if let Some(token) = roon_state.tokens.get(core_id) {
+                                    reg_info["token"] = token.to_owned().into();
                                 }
 
                                 let req_id = moo.req_id.lock().unwrap().to_owned();
@@ -453,9 +457,11 @@ impl RoonApi {
                                     #[cfg(any(feature = "status", feature = "transport", feature = "browse", feature = "image"))]
                                     services: services.clone()
                                 };
-                                let mut roon_state = get_roon_state();
 
-                                roon_state["tokens"][&core.id] = body["token"].as_str().unwrap().into();
+                                let mut roon_state = get_roon_state();
+                                let token = body["token"].as_str().unwrap().into();
+
+                                roon_state.tokens.insert(core.id.to_owned(), token);
 
                                 #[cfg(feature = "pairing")]
                                 {
@@ -465,15 +471,15 @@ impl RoonApi {
                                         let mut paired_core = paired_core.lock().unwrap();
 
                                         if paired_core.is_none() {
-                                            if let Some(set_core_id) = roon_state.get("paired_core_id") {
-                                                if set_core_id.as_str().unwrap() == core.id {
+                                            if let Some(set_core_id) = roon_state.paired_core_id.as_ref() {
+                                                if *set_core_id == core.id {
                                                     *paired_core = Some(core.to_owned());
                                                     paired_core_id = Some(core.id.to_owned());
                                                 }
                                             } else {
                                                 *paired_core = Some(core.to_owned());
                                                 paired_core_id = Some(core.id.to_owned());
-                                                roon_state["paired_core_id"] = core.id.to_owned().into();
+                                                roon_state.paired_core_id = core.id.to_owned().into();
                                             }
                                         }
                                     }
@@ -507,7 +513,7 @@ impl RoonApi {
                                     }
                                 }
 
-                                core_tx.send((CoreEvent::Found(core.clone()), Some((roon_state, Parsed::RoonState)))).await.unwrap();
+                                core_tx.send((CoreEvent::Found(core.clone()), Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
 
                                 cores.insert(core.moo.id, core);
                             } else if msg["verb"] == "REQUEST" {
@@ -529,7 +535,7 @@ impl RoonApi {
                                                 let mut state = get_roon_state();
 
                                                 if let Some(paired_core_id) = body.as_ref().unwrap().get("paired_core_id") {
-                                                    state["paired_core_id"] = paired_core_id.clone();
+                                                    state.paired_core_id = paired_core_id.as_str().unwrap().to_owned().into();
                                                     roon_state = Some(state);
                                                 }
                                             }
@@ -555,7 +561,7 @@ impl RoonApi {
                                     }
 
                                     if let Some(roon_state) = roon_state {
-                                        core_tx.send((CoreEvent::None, Some((roon_state, Parsed::RoonState)))).await.unwrap();
+                                        core_tx.send((CoreEvent::None, Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
                                     }
 
                                     provided.insert(svc_name, svc);
@@ -804,6 +810,18 @@ impl RoonApi {
         }
     }
 
+    pub fn save_roon_state(path: &str, roon_state: RoonState) -> std::io::Result<()> {
+        let value = roon_state.serialize(serde_json::value::Serializer).unwrap();
+
+        RoonApi::save_config(path, "roonstate", value)
+    }
+
+    pub fn load_roon_state(path: &str) -> RoonState {
+        let value = RoonApi::load_config(path, "roonstate");
+
+        serde_json::from_value::<RoonState>(value).unwrap_or_default()
+    }
+
     fn read_and_parse(path: &str) -> Option<serde_json::Value> {
         let content = std::fs::read(path).ok()?;
         let content = std::str::from_utf8(&content).ok()?;
@@ -877,7 +895,7 @@ pub enum Services {
 #[derive(Debug)]
 pub enum Parsed {
     None,
-    RoonState,
+    RoonState(RoonState),
     #[cfg(feature = "settings")]  SettingsSaved(serde_json::Value),
     #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
     #[cfg(feature = "transport")] ZonesSeek(Vec<transport::ZoneSeek>),
@@ -985,9 +1003,7 @@ mod tests {
         let info = info!("com.theappgineer", "Rust Roon API");
         let mut roon = RoonApi::new(info);
         let provided: HashMap<String, Svc> = HashMap::new();
-        let get_roon_state = || {
-            RoonApi::load_config(CONFIG_PATH, "roonstate")
-        };
+        let get_roon_state = || RoonApi::load_roon_state(CONFIG_PATH);
         let (mut handles, mut core_rx) = roon
             .start_discovery(Box::new(get_roon_state), provided).await.unwrap();
 
@@ -1004,9 +1020,9 @@ mod tests {
                         _ => ()
                     }
 
-                    if let Some((msg, parsed)) = msg {
-                        if let Parsed::RoonState = parsed {
-                            RoonApi::save_config(CONFIG_PATH, "roonstate", msg).unwrap();
+                    if let Some((_, parsed)) = msg {
+                        if let Parsed::RoonState(roon_state) = parsed {
+                            RoonApi::save_roon_state(CONFIG_PATH, roon_state).unwrap();
                         }
                     }
                 }
