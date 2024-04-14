@@ -176,6 +176,10 @@ impl Browse {
             return Parsed::LoadResult(body, multi_session_key);
         }
 
+        if msg["name"] == "InvalidItemKey" {
+            return Parsed::Error(msg["name"].as_str().unwrap().to_owned());
+        }
+
         Parsed::None
     }
 }
@@ -352,7 +356,8 @@ mod tests {
                                         browse.browse(&opts).await;
                                     }
                                 }
-                                _ => ()
+                                Parsed::Error(err) => log::error!("{}", err),
+                                _ => (),
                             }
                         }
                     }

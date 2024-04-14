@@ -895,6 +895,7 @@ pub enum Services {
 #[derive(Debug)]
 pub enum Parsed {
     None,
+    Error(String),
     RoonState(RoonState),
     #[cfg(feature = "settings")]  SettingsSaved(serde_json::Value),
     #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
