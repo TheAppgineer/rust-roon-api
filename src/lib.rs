@@ -915,6 +915,7 @@ pub enum Parsed {
 #[derive(Debug)]
 pub enum RoonApiError {
     BrowseInvalidItemKey(usize),
+    ImageUnexpectedError((usize, String)),
 }
 
 impl Error for RoonApiError {}
@@ -924,6 +925,9 @@ impl fmt::Display for RoonApiError {
         match self {
             RoonApiError::BrowseInvalidItemKey(req_id) => {
                 write!(f, "Request {req_id}: InvalidItemKey")
+            }
+            RoonApiError::ImageUnexpectedError((req_id, image_key)) => {
+                write!(f, "Request {req_id}: UnexpectedError on image_key {image_key}")
             }
         }
     }

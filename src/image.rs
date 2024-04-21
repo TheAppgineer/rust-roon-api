@@ -1,7 +1,8 @@
-use crate::{moo::ContentType, Moo, Parsed};
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+
+use crate::{moo::ContentType, Moo, Parsed, RoonApiError};
 
 pub const SVCNAME: &str = "com.roonlabs.image:1";
 
@@ -58,7 +59,7 @@ impl Args {
 #[derive(Clone, Debug, Default)]
 pub struct Image {
     moo: Option<Moo>,
-    pending: Arc<Mutex<HashMap<usize, String>>>,
+    pending: Arc<Mutex<HashMap<String, Option<usize>>>>,
 }
 
 impl Image {
@@ -75,15 +76,15 @@ impl Image {
 
     pub async fn get_image(&self, image_key: &str, args: Args) -> Option<usize> {
         let req_id = {
-            let pending = self.pending.lock().await;
+            let mut pending = self.pending.lock().await;
 
-            pending.iter().find_map(|(key, value)| {
-                if value == image_key {
-                    Some(key.to_owned())
-                } else {
-                    None
-                }
-            })
+            if pending.contains_key(image_key) {
+                Some(pending.get(image_key).cloned().flatten()?)
+            } else {
+                pending.insert(image_key.to_owned(), None);
+
+                None
+            }
         };
 
         match req_id {
@@ -101,11 +102,11 @@ impl Image {
                 self.pending
                     .lock()
                     .await
-                    .insert(req_id?, image_key.to_owned());
+                    .insert(image_key.to_owned(), req_id);
 
                 req_id
             }
-            Some(_) => req_id,
+            _ => req_id,
         }
     }
 
@@ -115,16 +116,31 @@ impl Image {
             .unwrap()
             .parse::<usize>()
             .unwrap();
-        let parsed = if let Some(image_key) = self.pending.lock().await.remove(&req_id) {
+        let mut pending = self.pending.lock().await;
+        let image_key = pending.iter().find_map(|(key, value)| {
+            if (*value)? == req_id {
+                Some(key.to_owned())
+            } else {
+                None
+            }
+        })?;
+
+        pending.remove(&image_key);
+
+        if msg["name"] == "UnexpectedError" {
+            return Some(Parsed::Error(RoonApiError::ImageUnexpectedError((req_id, image_key))));
+        }
+
+        let parsed = {
             match body {
                 ContentType::Jpeg(jpeg) => {
                     Some(Parsed::Jpeg((image_key.to_owned(), jpeg.to_owned())))
                 }
-                ContentType::Png(png) => Some(Parsed::Png((image_key.to_owned(), png.to_owned()))),
+                ContentType::Png(png) => {
+                    Some(Parsed::Png((image_key.to_owned(), png.to_owned())))
+                }
                 _ => None,
             }
-        } else {
-            None
         };
 
         parsed
@@ -262,6 +278,7 @@ mod tests {
                             Parsed::Jpeg((image_key, jpeg)) => {
                                 fs::write(format!("{image_key}.jpg"), jpeg).unwrap();
                             }
+                            Parsed::Error(err) => log::error!("{}", err),
                             _ => {}
                         }
                     }
