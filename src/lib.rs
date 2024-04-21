@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::{error::Error, fmt};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use futures_util::{Future, FutureExt, future::select_all};
@@ -895,7 +896,7 @@ pub enum Services {
 #[derive(Debug)]
 pub enum Parsed {
     None,
-    Error(String),
+    Error(RoonApiError),
     RoonState(RoonState),
     #[cfg(feature = "settings")]  SettingsSaved(serde_json::Value),
     #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
@@ -909,6 +910,23 @@ pub enum Parsed {
     #[cfg(feature = "browse")]    LoadResult(browse::LoadResult, Option<String>),
     #[cfg(feature = "image")]     Jpeg((String, Vec<u8>)),
     #[cfg(feature = "image")]     Png((String, Vec<u8>)),
+}
+
+#[derive(Debug)]
+pub enum RoonApiError {
+    BrowseInvalidItemKey(usize),
+}
+
+impl Error for RoonApiError {}
+
+impl fmt::Display for RoonApiError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RoonApiError::BrowseInvalidItemKey(req_id) => {
+                write!(f, "Request {req_id}: InvalidItemKey")
+            }
+        }
+    }
 }
 
 #[derive(Serialize)]

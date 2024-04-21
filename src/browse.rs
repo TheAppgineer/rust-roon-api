@@ -2,7 +2,7 @@ use std::{sync::Arc, collections::HashMap};
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::{Moo, Parsed};
+use crate::{Moo, Parsed, RoonApiError};
 
 pub const SVCNAME: &str = "com.roonlabs.browse:1";
 
@@ -177,7 +177,7 @@ impl Browse {
         }
 
         if msg["name"] == "InvalidItemKey" {
-            return Parsed::Error(msg["name"].as_str().unwrap().to_owned());
+            return Parsed::Error(RoonApiError::BrowseInvalidItemKey(req_id));
         }
 
         Parsed::None
