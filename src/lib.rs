@@ -914,7 +914,7 @@ pub enum Parsed {
 
 #[derive(Debug)]
 pub enum RoonApiError {
-    BrowseInvalidItemKey(usize),
+    BrowseInvalidItemKey((usize, Option<String>)),
     ImageUnexpectedError((usize, String)),
 }
 
@@ -923,8 +923,12 @@ impl Error for RoonApiError {}
 impl fmt::Display for RoonApiError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RoonApiError::BrowseInvalidItemKey(req_id) => {
-                write!(f, "Request {req_id}: InvalidItemKey")
+            RoonApiError::BrowseInvalidItemKey((req_id, multi_session_key)) => {
+                if let Some(multi_session_key) = multi_session_key {
+                    write!(f, "Request {req_id}: InvalidItemKey for session {multi_session_key}")
+                } else {
+                    write!(f, "Request {req_id}: InvalidItemKey for default session")
+                }
             }
             RoonApiError::ImageUnexpectedError((req_id, image_key)) => {
                 write!(f, "Request {req_id}: UnexpectedError on image_key {image_key}")

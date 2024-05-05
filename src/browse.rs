@@ -177,7 +177,10 @@ impl Browse {
         }
 
         if msg["name"] == "InvalidItemKey" {
-            return Parsed::Error(RoonApiError::BrowseInvalidItemKey(req_id));
+            let mut session_keys = self.session_keys.lock().await;
+            let multi_session_key = session_keys.remove(&req_id);
+
+            return Parsed::Error(RoonApiError::BrowseInvalidItemKey((req_id, multi_session_key)));
         }
 
         Parsed::None
