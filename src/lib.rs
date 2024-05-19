@@ -915,6 +915,7 @@ pub enum Parsed {
 #[derive(Debug)]
 pub enum RoonApiError {
     BrowseInvalidItemKey((usize, Option<String>)),
+    BrowseInvalidLevels((usize, Option<String>)),
     ImageUnexpectedError((usize, String)),
 }
 
@@ -928,6 +929,13 @@ impl fmt::Display for RoonApiError {
                     write!(f, "Request {req_id}: InvalidItemKey for session {multi_session_key}")
                 } else {
                     write!(f, "Request {req_id}: InvalidItemKey for default session")
+                }
+            }
+            RoonApiError::BrowseInvalidLevels((req_id, multi_session_key)) => {
+                if let Some(multi_session_key) = multi_session_key {
+                    write!(f, "Request {req_id}: InvalidLevels for session {multi_session_key}")
+                } else {
+                    write!(f, "Request {req_id}: InvalidLevels for default session")
                 }
             }
             RoonApiError::ImageUnexpectedError((req_id, image_key)) => {
