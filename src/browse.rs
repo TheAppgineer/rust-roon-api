@@ -102,7 +102,7 @@ pub struct LoadResult {
 #[derive(Clone, Debug)]
 pub struct Browse {
     moo: Option<Moo>,
-    session_keys: Arc<Mutex<HashMap<usize, String>>>,
+    session_keys: Arc<Mutex<HashMap<usize, Option<String>>>>,
 }
 
 impl Default for Browse {
@@ -131,12 +131,9 @@ impl Browse {
         opts["hierarchy"] = "browse".into();
 
         let req = moo.send_req(SVCNAME.to_owned() + "/browse", Some(opts)).await.ok()?;
+        let mut session_keys = self.session_keys.lock().await;
 
-        if let Some(multi_session_key) = multi_session_key {
-            let mut session_keys = self.session_keys.lock().await;
-
-            session_keys.insert(req, multi_session_key);
-        }
+        session_keys.insert(req, multi_session_key);
 
         Some(req)
     }
@@ -149,45 +146,41 @@ impl Browse {
         opts["hierarchy"] = "browse".into();
 
         let req = moo.send_req(SVCNAME.to_owned() + "/load", Some(opts)).await.ok()?;
+        let mut session_keys = self.session_keys.lock().await;
 
-        if let Some(multi_session_key) = multi_session_key {
-            let mut session_keys = self.session_keys.lock().await;
-
-            session_keys.insert(req, multi_session_key);
-        }
+        session_keys.insert(req, multi_session_key);
 
         Some(req)
     }
 
     pub async fn parse_msg(&self, msg: &serde_json::Value) -> Parsed {
         let req_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
+        let mut session_keys = self.session_keys.lock().await;
+
+        if !session_keys.contains_key(&req_id) {
+            return Parsed::None;
+        }
+
+        let multi_session_key = session_keys.remove(&req_id).flatten();
 
         if let Ok(body) = serde_json::from_value::<BrowseResult>(msg["body"].to_owned()) {
-            let mut session_keys = self.session_keys.lock().await;
-            let multi_session_key = session_keys.remove(&req_id);
-
             return Parsed::BrowseResult(body, multi_session_key);
         }
 
         if let Ok(body) = serde_json::from_value::<LoadResult>(msg["body"].to_owned()) {
-            let mut session_keys = self.session_keys.lock().await;
-            let multi_session_key = session_keys.remove(&req_id);
-
             return Parsed::LoadResult(body, multi_session_key);
         }
 
         if msg["name"] == "InvalidItemKey" {
-            let mut session_keys = self.session_keys.lock().await;
-            let multi_session_key = session_keys.remove(&req_id);
-
             return Parsed::Error(RoonApiError::BrowseInvalidItemKey((req_id, multi_session_key)));
         }
 
         if msg["name"] == "InvalidLevels" {
-            let mut session_keys = self.session_keys.lock().await;
-            let multi_session_key = session_keys.remove(&req_id);
-
             return Parsed::Error(RoonApiError::BrowseInvalidLevels((req_id, multi_session_key)));
+        }
+
+        if msg["name"] == "UnexpectedError" {
+            return Parsed::Error(RoonApiError::BrowseUnexpectedError((req_id, multi_session_key)));
         }
 
         Parsed::None

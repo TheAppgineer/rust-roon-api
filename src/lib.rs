@@ -616,6 +616,7 @@ impl RoonApi {
                                                         CoreEvent::None,
                                                         Some((serde_json::Value::Null, parsed))
                                                     )).await.unwrap();
+                                                    break;
                                                 }
                                             }
                                             #[cfg(any(feature = "status", feature = "settings"))]
@@ -914,6 +915,7 @@ pub enum Parsed {
 
 #[derive(Debug)]
 pub enum RoonApiError {
+    BrowseUnexpectedError((usize, Option<String>)),
     BrowseInvalidItemKey((usize, Option<String>)),
     BrowseInvalidLevels((usize, Option<String>)),
     ImageUnexpectedError((usize, String)),
@@ -924,6 +926,13 @@ impl Error for RoonApiError {}
 impl fmt::Display for RoonApiError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            RoonApiError::BrowseUnexpectedError((req_id, multi_session_key)) => {
+                if let Some(multi_session_key) = multi_session_key {
+                    write!(f, "Request {req_id}: UnexpectedError for session {multi_session_key}")
+                } else {
+                    write!(f, "Request {req_id}: UnexpectedError for default session")
+                }
+            }
             RoonApiError::BrowseInvalidItemKey((req_id, multi_session_key)) => {
                 if let Some(multi_session_key) = multi_session_key {
                     write!(f, "Request {req_id}: InvalidItemKey for session {multi_session_key}")
