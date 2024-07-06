@@ -569,8 +569,8 @@ mod tests {
             loop {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
-                        CoreEvent::Found(mut core) => {
-                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
+                        CoreEvent::Registered(mut core) => {
+                            log::info!("Core registered: {}, version {}", core.display_name, core.display_version);
 
                             transport = core.get_transport().cloned();
 

@@ -57,7 +57,8 @@ pub struct Core {
 #[derive(Debug)]
 pub enum CoreEvent {
     None,
-    Found(Core),
+    Discovered(Core, Option<String>),
+    Registered(Core),
     Lost(Core)
 }
 
@@ -409,7 +410,6 @@ impl RoonApi {
                         Some((msg, _body)) => {
                             if msg["request_id"] == "0" && msg["body"]["core_id"].is_string() {
                                 let roon_state = get_roon_state();
-                                let moo = moo_senders.get_mut(index).unwrap();
 
                                 #[cfg(any(feature = "transport", feature = "browse", feature = "image"))]
                                 if let Some(services) = &services {
@@ -437,17 +437,6 @@ impl RoonApi {
                                     reg_info["provided_services"].as_array_mut().unwrap().push(json!(name));
                                 }
 
-                                let core_id = msg["body"]["core_id"].as_str().unwrap();
-
-                                if let Some(token) = roon_state.tokens.get(core_id) {
-                                    reg_info["token"] = token.to_owned().into();
-                                }
-
-                                let req_id = moo.req_id.lock().unwrap().to_owned();
-
-                                props_option.push((&["REQUEST", "com.roonlabs.registry:1/register"], Some(reg_info.to_owned())));
-                                response_ids.push(HashMap::from([(index, req_id)]));
-                            } else if msg["name"] == "Registered" {
                                 let body = &msg["body"];
                                 let moo = user_moos.remove(&index).unwrap();
                                 let core = Core {
@@ -458,9 +447,27 @@ impl RoonApi {
                                     #[cfg(any(feature = "status", feature = "transport", feature = "browse", feature = "image"))]
                                     services: services.clone()
                                 };
+                                let token = roon_state.tokens.get(&core.id).cloned();
 
+                                if let Some(token) = token.as_deref() {
+                                    reg_info["token"] = token.to_owned().into();
+                                }
+
+                                core_tx.send((CoreEvent::Discovered(core.clone(), token), Some((msg, Parsed::None)))).await.unwrap();
+
+                                cores.insert(core.moo.id, core);
+
+                                let moo = moo_senders.get_mut(index).unwrap();
+                                let req_id = moo.req_id.lock().unwrap().to_owned();
+
+                                props_option.push((&["REQUEST", "com.roonlabs.registry:1/register"], Some(reg_info.to_owned())));
+                                response_ids.push(HashMap::from([(index, req_id)]));
+                            } else if msg["name"] == "Registered" {
                                 let mut roon_state = get_roon_state();
+                                let body = &msg["body"];
                                 let token = body["token"].as_str().unwrap().into();
+                                let moo_id = moo_senders.get_mut(index).unwrap().id;
+                                let core = cores.get(&moo_id).unwrap();
 
                                 roon_state.tokens.insert(core.id.to_owned(), token);
 
@@ -480,7 +487,7 @@ impl RoonApi {
                                             } else {
                                                 *paired_core = Some(core.to_owned());
                                                 paired_core_id = Some(core.id.to_owned());
-                                                roon_state.paired_core_id = core.id.to_owned().into();
+                                                roon_state.paired_core_id = Some(core.id.to_owned());
                                             }
                                         }
                                     }
@@ -514,9 +521,7 @@ impl RoonApi {
                                     }
                                 }
 
-                                core_tx.send((CoreEvent::Found(core.clone()), Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
-
-                                cores.insert(core.moo.id, core);
+                                core_tx.send((CoreEvent::Registered(core.to_owned()), Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
                             } else if msg["verb"] == "REQUEST" {
                                 let request_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
                                 let svc_name = msg["service"].as_str().unwrap().to_owned();
@@ -918,6 +923,7 @@ pub enum RoonApiError {
     BrowseUnexpectedError((usize, Option<String>)),
     BrowseInvalidItemKey((usize, Option<String>)),
     BrowseInvalidLevels((usize, Option<String>)),
+    ImageNotFound((usize, String)),
     ImageUnexpectedError((usize, String)),
 }
 
@@ -946,6 +952,9 @@ impl fmt::Display for RoonApiError {
                 } else {
                     write!(f, "Request {req_id}: InvalidLevels for default session")
                 }
+            }
+            RoonApiError::ImageNotFound((req_id, image_key)) => {
+                write!(f, "Request {req_id}: image_key {image_key} not found")
             }
             RoonApiError::ImageUnexpectedError((req_id, image_key)) => {
                 write!(f, "Request {req_id}: UnexpectedError on image_key {image_key}")
@@ -1055,8 +1064,27 @@ mod tests {
             loop {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
-                        CoreEvent::Found(core) => {
-                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
+                        CoreEvent::Discovered(core, token) => {
+                            match token {
+                                Some(token) => {
+                                    log::info!(
+                                        "Core rediscovered: {}, version {}, token {}",
+                                        core.display_name,
+                                        core.display_version,
+                                        token
+                                    );
+                                }
+                                None => {
+                                    log::info!(
+                                        "Core discovered: {}, version {}",
+                                        core.display_name,
+                                        core.display_version
+                                    );
+                                }
+                            }
+                        }
+                        CoreEvent::Registered(core) => {
+                            log::info!("Core registered: {}, version {}", core.display_name, core.display_version);
                         }
                         CoreEvent::Lost(core) => {
                             log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);

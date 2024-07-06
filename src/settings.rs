@@ -314,8 +314,8 @@ mod tests {
             loop {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
-                        CoreEvent::Found(core) => {
-                            log::info!("Core found: {}, version {}", core.display_name, core.display_version);
+                        CoreEvent::Registered(core) => {
+                            log::info!("Core registered: {}, version {}", core.display_name, core.display_version);
                         }
                         CoreEvent::Lost(core) => {
                             log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);
