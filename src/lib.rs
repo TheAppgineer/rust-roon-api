@@ -58,7 +58,7 @@ pub struct Core {
 pub enum CoreEvent {
     None,
     Discovered(Core, Option<String>),
-    Registered(Core),
+    Registered(Core, String),
     Lost(Core)
 }
 
@@ -465,11 +465,11 @@ impl RoonApi {
                             } else if msg["name"] == "Registered" {
                                 let mut roon_state = get_roon_state();
                                 let body = &msg["body"];
-                                let token = body["token"].as_str().unwrap().into();
+                                let token = body["token"].as_str().unwrap().to_string();
                                 let moo_id = moo_senders.get_mut(index).unwrap().id;
                                 let core = cores.get(&moo_id).unwrap();
 
-                                roon_state.tokens.insert(core.id.to_owned(), token);
+                                roon_state.tokens.insert(core.id.to_owned(), token.to_owned());
 
                                 #[cfg(feature = "pairing")]
                                 {
@@ -521,7 +521,7 @@ impl RoonApi {
                                     }
                                 }
 
-                                core_tx.send((CoreEvent::Registered(core.to_owned()), Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
+                                core_tx.send((CoreEvent::Registered(core.to_owned(), token), Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
                             } else if msg["verb"] == "REQUEST" {
                                 let request_id = msg["request_id"].as_str().unwrap().parse::<usize>().unwrap();
                                 let svc_name = msg["service"].as_str().unwrap().to_owned();
@@ -1083,8 +1083,13 @@ mod tests {
                                 }
                             }
                         }
-                        CoreEvent::Registered(core) => {
-                            log::info!("Core registered: {}, version {}", core.display_name, core.display_version);
+                        CoreEvent::Registered(core, token) => {
+                            log::info!(
+                                "Core registered: {}, version {}, token {}",
+                                core.display_name,
+                                core.display_version,
+                                token
+                            );
                         }
                         CoreEvent::Lost(core) => {
                             log::warn!("Core lost: {}, version {}", core.display_name, core.display_version);

@@ -184,7 +184,7 @@ mod tests {
             loop {
                 if let Some((core, msg)) = core_rx.recv().await {
                     match core {
-                        CoreEvent::Registered(mut core) => {
+                        CoreEvent::Registered(mut core, _) => {
                             log::info!(
                                 "Core registered: {}, version {}",
                                 core.display_name,
