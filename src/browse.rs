@@ -171,19 +171,21 @@ impl Browse {
             return Parsed::LoadResult(body, multi_session_key);
         }
 
-        if msg["name"] == "InvalidItemKey" {
-            return Parsed::Error(RoonApiError::BrowseInvalidItemKey((req_id, multi_session_key)));
+        match msg["name"].as_str() {
+            Some("InvalidItemKey") => {
+                Parsed::Error(RoonApiError::BrowseInvalidItemKey((req_id, multi_session_key)))
+            }
+            Some("InvalidLevels") => {
+                Parsed::Error(RoonApiError::BrowseInvalidLevels((req_id, multi_session_key)))
+            }
+            Some("UnexpectedError") => {
+                Parsed::Error(RoonApiError::BrowseUnexpectedError((req_id, multi_session_key)))
+            }
+            Some("ZoneNotFound") => {
+                Parsed::Error(RoonApiError::BrowseZoneNotFound((req_id, multi_session_key)))
+            }
+            _ => Parsed::None
         }
-
-        if msg["name"] == "InvalidLevels" {
-            return Parsed::Error(RoonApiError::BrowseInvalidLevels((req_id, multi_session_key)));
-        }
-
-        if msg["name"] == "UnexpectedError" {
-            return Parsed::Error(RoonApiError::BrowseUnexpectedError((req_id, multi_session_key)));
-        }
-
-        Parsed::None
     }
 }
 

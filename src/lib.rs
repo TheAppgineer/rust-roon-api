@@ -923,6 +923,7 @@ pub enum RoonApiError {
     BrowseUnexpectedError((usize, Option<String>)),
     BrowseInvalidItemKey((usize, Option<String>)),
     BrowseInvalidLevels((usize, Option<String>)),
+    BrowseZoneNotFound((usize, Option<String>)),
     ImageNotFound((usize, String)),
     ImageUnexpectedError((usize, String)),
 }
@@ -951,6 +952,13 @@ impl fmt::Display for RoonApiError {
                     write!(f, "Request {req_id}: InvalidLevels for session {multi_session_key}")
                 } else {
                     write!(f, "Request {req_id}: InvalidLevels for default session")
+                }
+            }
+            RoonApiError::BrowseZoneNotFound((req_id, multi_session_key)) => {
+                if let Some(multi_session_key) = multi_session_key {
+                    write!(f, "Request {req_id}: Zone not found for session {multi_session_key}")
+                } else {
+                    write!(f, "Request {req_id}: Zone not found for default session")
                 }
             }
             RoonApiError::ImageNotFound((req_id, image_key)) => {
