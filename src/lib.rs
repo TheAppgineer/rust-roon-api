@@ -568,6 +568,21 @@ impl RoonApi {
 
                                     if let Some(roon_state) = roon_state {
                                         core_tx.send((CoreEvent::None, Some((msg, Parsed::RoonState(roon_state))))).await.unwrap();
+                                    } else {
+                                        #[cfg(feature = "settings")]
+                                        if svc_name == settings::SVCNAME {
+                                            if let Some(sub_key) = msg["body"]["subscription_key"].as_str() {
+                                                if msg["name"] == "subscribe_settings" {
+                                                    let event = Parsed::SettingsSubscribed(sub_key.to_owned());
+
+                                                    core_tx.send((CoreEvent::None, Some((msg, event)))).await.unwrap();
+                                                } else if msg["name"] == "unsubscribe_settings" {
+                                                    let event = Parsed::SettingsUnsubscribed(sub_key.to_owned());
+
+                                                    core_tx.send((CoreEvent::None, Some((msg, event)))).await.unwrap();
+                                                }
+                                            }
+                                        }
                                     }
 
                                     provided.insert(svc_name, svc);
@@ -904,6 +919,8 @@ pub enum Parsed {
     None,
     Error(RoonApiError),
     RoonState(RoonState),
+    #[cfg(feature = "settings")]  SettingsSubscribed(String),
+    #[cfg(feature = "settings")]  SettingsUnsubscribed(String),
     #[cfg(feature = "settings")]  SettingsSaved(serde_json::Value),
     #[cfg(feature = "transport")] Zones(Vec<transport::Zone>),
     #[cfg(feature = "transport")] ZonesSeek(Vec<transport::ZoneSeek>),

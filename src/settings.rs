@@ -328,6 +328,12 @@ mod tests {
                             Parsed::RoonState(roon_state) => {
                                 RoonApi::save_roon_state(CONFIG_PATH, roon_state).unwrap();
                             }
+                            Parsed::SettingsSubscribed(sub_key) => {
+                                log::info!("Settings got subscribed with key {sub_key}");
+                            }
+                            Parsed::SettingsUnsubscribed(sub_key) => {
+                                log::info!("Settings got unsubscribed with key {sub_key}");
+                            }
                             Parsed::SettingsSaved(settings) => {
                                 RoonApi::save_config(CONFIG_PATH, "settings", settings.to_owned()).unwrap();
 
