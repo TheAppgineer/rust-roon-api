@@ -661,6 +661,7 @@ impl RoonApi {
                             }
 
                             if moo_receivers.is_empty() {
+                                sleep(Duration::from_millis(100)).await;
                                 break 'moo;
                             }
                         }
@@ -716,6 +717,7 @@ impl RoonApi {
                                 }
 
                                 if moo_receivers.is_empty() {
+                                    sleep(Duration::from_millis(100)).await;
                                     break 'moo;
                                 }
                             }
