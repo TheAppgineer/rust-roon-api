@@ -4,6 +4,7 @@ use std::collections::{hash_map, HashMap};
 use std::str::from_utf8;
 use std::sync::Arc;
 use futures_util::Future;
+use socket2::{Socket, Domain, Type, Protocol};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc::{self, Receiver}, Mutex};
 use tokio::time::{sleep, Duration};
@@ -292,7 +293,11 @@ impl Multicast {
             broadcast_octets[index] = ip_octets[index] | (netmask_octets[index] ^ 255);
         }
 
-        let recv_sock = UdpSocket::bind(SocketAddr::from(([0; 4], SOOD_PORT))).await?;
+        let recv_socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        recv_socket.set_reuse_address(true)?;
+        recv_socket.set_nonblocking(true)?;
+        recv_socket.bind(&SocketAddr::from(([0; 4], SOOD_PORT)).into())?;
+        let recv_sock = UdpSocket::from_std(recv_socket.into())?;
         let send_sock = UdpSocket::bind(SocketAddr::from((ip_octets, 0))).await?;
         let broadcast = Ipv4Addr::from(broadcast_octets);
 
